@@ -1,4 +1,4 @@
-# Monday: PE probe on Jaime's machine
+# Wednesday: PE probe on Jaime's machine
 
 ## 0. Before leaving home
 - [ ] 10–20 Unity screenshots of terrain (grass, dirt path, pavement, trees) in a folder
