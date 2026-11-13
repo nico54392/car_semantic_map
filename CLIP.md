@@ -1,7 +1,7 @@
 # CLIP / OpenScene pipeline on the work computer
 
 Per-point CLIP embeddings on the map (OpenScene 2D fusion) → text queries → traversability cost map → A* path.
-CLIP first to get it running; PE-Core swaps in later (only `car_semantic_map/clip_features.py` changes).
+CLIP first to get it running, then PE-Core (`--backbone pe-b / pe-l`, section 5).
 
 You don't need the OpenScene repo for this: its 3D network needs MinkowskiEngine, and the fusion step is
 reimplemented here. Keep the clone around for reference (their `scripts/feature_fusion/` is what
@@ -40,6 +40,32 @@ With a GPU, steps 5 and 8 should drop from ~1 s/view to well under that.
 - `out/synth01/plan.png`, `out/synth01/report.md`
 - `out/rellis_frame/fig1_2d_segmentation.png`
 
+## 5. PE-Core (Perception Encoder)
+Same pipeline, swap the 2D features. Weights download on first use (B ~1.6 GB, L ~2.5 GB).
+```bash
+conda activate nico_clip
+# which backbone / variant is best? (one real frame, Jaime's RELLIS prompts)
+python tools/backbone_compare.py data/rellis_sample out/backbones \
+  --backbones clip pe-b:plain pe-b:last_v pe-b:last_v_only pe-l:plain pe-l:last_v pe-l:last_v_only
+```
+Bring back the terminal table + `out/backbones/backbones.png`. Then use the winner:
+```bash
+python tools/openscene_map.py build out/synth01 --backbone pe-l --variant <best>
+python tools/openscene_map.py plan  out/synth01 --start 5 -5 --goal 35 -35 --classes grass mud puddle bush dirt gravel rock
+python tools/scene_eval.py openscene out/synth01 --backbone pe-l --variant <best>
+python tools/scene_eval.py compare   out/synth01
+```
+`query`/`plan` pick the text encoder from the map file automatically, so they always match how the map was built.
+
+How the PE features are made (`DensePE` in `car_semantic_map/clip_features.py`):
+- PE-Core has RoPE + an attention-pooling head instead of a CLS token, so the CLIP trick doesn't apply
+- image cut into overlapping tiles at the native size (224 / 336) so RoPE never gets stretched
+- each patch token goes through the pooling head's value path → pool MLP → projection to text space
+- variants for the last block: `plain` (unchanged), `last_v` (attention → value path), `last_v_only` (value path only, like ClearCLIP)
+
+Reference numbers (sandbox, CPU): `clip` on the RELLIS frame with Jaime's prompts = 2D acc 0.54 / mIoU 0.20, 3D acc 0.54.
+Note the synthetic scene has weak textures (mud is a 35 px crop), so judge backbones on the real frame first.
+
 ## Tools
 | Command | What |
 |---|---|
@@ -50,7 +76,8 @@ With a GPU, steps 5 and 8 should drop from ~1 s/view to well under that.
 | `tools/openscene_map.py plan <scene> --start x y --goal x y` | Class probs → traversability/μ → cost map → A* (`--cell`, `--classes`) |
 | `tools/scene_eval.py openscene / fuse-labels / compare` | Score methods against Unity GT with Jaime's metrics (+ obstacle F1, cost-map MAE, μ MAE) |
 | `tools/make_synthetic.py` | Fake Unity export for testing |
-| `tools/rellis_frame_test.py` | Single real frame, 2D + 3D zero-shot test |
+| `tools/rellis_frame_test.py` | Single real frame, 2D + 3D zero-shot test (CLIP only, original test) |
+| `tools/backbone_compare.py` | Same frame, several backbones / variants side by side |
 
 `--weights` everywhere = open_clip pretrained tag (default `laion400m_e32`) or a `.pt` path.
 
@@ -69,7 +96,7 @@ If we go with Unity Perception / SOLO instead, the SOLO loader just has to produ
 `fusion_core` directly, which already matches these conventions with `axis_flip=(1,1,1)`).
 
 ## Code
-- `car_semantic_map/clip_features.py`: dense CLIP (ClearCLIP-style last layer), GPU if available. **The PE-Core swap goes here**
+- `car_semantic_map/clip_features.py`: `DenseCLIP`, `DensePE`, `make_extractor('clip' | 'pe-b' | 'pe-l' ...)`. GPU if available
 - `car_semantic_map/openscene_fusion.py`: project map points into views (depth-checked), average features; label majority vote
 - `car_semantic_map/scene_io.py`: scene loader, projection, `check_conventions`
 - `car_semantic_map/evaluate.py`: metrics, cost map

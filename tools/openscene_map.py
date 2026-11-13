@@ -7,7 +7,8 @@ python tools/openscene_map.py build <scene> --from-depth    # no map.ply: build 
 python tools/openscene_map.py query <scene> "wet mud" "standing water"     # heatmaps on the map
 python tools/openscene_map.py plan  <scene> --start x y --goal x y [--cell 0.2] [--classes grass mud ...]
 
---weights (default laion400m_e32) is an open_clip pretrained tag or a .pt path.
+--backbone clip | pe-b | pe-l (build only; query/plan use whatever the map was built with).
+--weights: open_clip tag or .pt path, default per backbone (laion400m_e32 / meta).
 
 Coordinates are the map's world frame (ROS FLU, meters). The map file stores one fp16
 512-d CLIP embedding per point, so any new class or query is just a dot product, no re-run
@@ -28,9 +29,9 @@ ONTOLOGY = ROOT / "config" / "ontology.json"
 
 # ---------------------------------------------------------------- map
 
-def build(scene_dir, weights, max_views=None, from_depth=False, voxel=0.1):
-    from car_semantic_map.clip_features import DenseCLIP
-    ext = DenseCLIP(weights)
+def build(scene_dir, weights, max_views=None, from_depth=False, voxel=0.1, backbone='clip', variant='last_v_only'):
+    from car_semantic_map.clip_features import make_extractor
+    ext = make_extractor(backbone, weights, **({'variant': variant} if backbone != 'clip' else {}))
     if not from_depth:
         # OpenScene: project the given map (map.ply) into every view
         from car_semantic_map.openscene_fusion import fuse_features
@@ -51,19 +52,21 @@ def build(scene_dir, weights, max_views=None, from_depth=False, voxel=0.1):
         print(f"fusion_core: {len(pts)} voxels at {voxel} m from {len(s.views)} views")
     out = Path(scene_dir) / "embedded_map.npz"
     np.savez_compressed(out, points=pts, feat=feat.astype(np.float16), count=count,
-                        encoder="clip ViT-B/16 laion400m, ClearCLIP dense", sec_per_view=t)
+                        backbone=backbone, variant=variant, sec_per_view=t)
     print(f"saved {out} ({out.stat().st_size / 1e6:.1f} MB)")
 
 
 class EmbeddedMap:
     def __init__(self, scene_dir, weights, ontology=ONTOLOGY):
         d = np.load(Path(scene_dir) / "embedded_map.npz")
+        backbone = str(d["backbone"]) if "backbone" in d else "clip"   # text side must match the map
         self.points, self.count = d["points"], d["count"]
         self.feat = torch.from_numpy(d["feat"].astype(np.float32))
         self.seen = self.count > 0
         self.onto = load_ontology(ontology)
-        from car_semantic_map.clip_features import DenseCLIP
-        self.enc = DenseCLIP(weights)
+        from car_semantic_map.clip_features import make_extractor
+        self.enc = make_extractor(backbone, weights)
+        print(f"embedded map built with {backbone}")
 
     def query(self, text):
         """cosine similarity of every point to a free-text query (NaN where never seen)"""
@@ -149,7 +152,9 @@ def main():
     ap.add_argument("cmd", choices=["build", "query", "plan"])
     ap.add_argument("scene")
     ap.add_argument("texts", nargs="*")
-    ap.add_argument("--weights", default="laion400m_e32")
+    ap.add_argument("--backbone", default="clip", help="build only: clip | pe-b | pe-l | pe-s | pe-t")
+    ap.add_argument("--variant", default="last_v_only", help="build, PE only: plain | last_v | last_v_only")
+    ap.add_argument("--weights", default=None, help="open_clip tag or .pt (default per backbone)")
     ap.add_argument("--from-depth", action="store_true", help="build: no map.ply, back-project depth (fusion_core)")
     ap.add_argument("--voxel", type=float, default=0.1, help="build --from-depth voxel size (m)")
     ap.add_argument("--ontology", default=str(ONTOLOGY))
@@ -162,7 +167,7 @@ def main():
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
 
     if a.cmd == "build":
-        return build(a.scene, a.weights, a.max_views, a.from_depth, a.voxel)
+        return build(a.scene, a.weights, a.max_views, a.from_depth, a.voxel, a.backbone, a.variant)
 
     m = EmbeddedMap(a.scene, a.weights, a.ontology)
     P = m.points

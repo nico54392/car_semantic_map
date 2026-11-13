@@ -2,9 +2,9 @@
 Check a scene export and score methods against its ground truth.
 
 python tools/scene_eval.py check       <scene>
-python tools/scene_eval.py openscene   <scene> [--weights laion400m_e32] [--name openscene_clip]
+python tools/scene_eval.py openscene   <scene> [--backbone clip|pe-b|pe-l] [--variant last_v_only]
 python tools/scene_eval.py fuse-labels <scene> --labels <dir with 000000.png ...> --name sam3_vote
-python tools/scene_eval.py compare     <scene> [--weights laion400m_e32]   (weights -> SCS + SwCM)
+python tools/scene_eval.py compare     <scene> [--backbone clip]   (text encoder used for SCS / SwCM)
 
 --weights is an open_clip pretrained tag (downloads once) or a path to a .pt file.
 
@@ -40,11 +40,11 @@ def cmd_check(a):
 
 
 def cmd_openscene(a):
-    from car_semantic_map.clip_features import DenseCLIP
+    from car_semantic_map.clip_features import make_extractor
     from car_semantic_map.openscene_fusion import fuse_features, classify
     s = load_scene(a.scene, a.max_views)
     ids, prompts = scene_prompts(s.classes, load_ontology(a.ontology))
-    ext = DenseCLIP(a.weights)
+    ext = make_extractor(a.backbone, a.weights, **({'variant': a.variant} if a.backbone != 'clip' else {}))
     Q, owner = ext.class_features(prompts)
     feat, count, t_img = fuse_features(s, ext)
     pred, prob = classify(feat, Q, owner, ids, count)
@@ -79,15 +79,13 @@ def cmd_compare(a):
     names = [s.classes[c] for c in ids]
 
     sim = None
-    cache = Path(a.scene) / "class_similarity.json"
+    cache = Path(a.scene) / f"class_similarity_{a.backbone}.json"     # SCS depends on the text encoder
     if cache.exists() and json.load(open(cache))["names"] == names:
         sim = np.array(json.load(open(cache))["sim"])
-    elif a.weights:
-        from car_semantic_map.clip_features import DenseCLIP
-        sim = class_similarity(onto, names, DenseCLIP(a.weights))
-        json.dump({"names": names, "sim": sim.tolist(), "encoder": "CLIP ViT-B/16 text"}, open(cache, "w"))
     else:
-        print("no --weights: skipping SCS / SwCM")
+        from car_semantic_map.clip_features import make_extractor
+        sim = class_similarity(onto, names, make_extractor(a.backbone, a.weights))
+        json.dump({"names": names, "sim": sim.tolist(), "encoder": a.backbone}, open(cache, "w"))
 
     res, preds = {}, {}
     for f in sorted((Path(a.scene) / "preds").glob("*.npz")):
@@ -151,12 +149,15 @@ if __name__ == "__main__":
         q.add_argument("--max_views", type=int, default=None)
         q.add_argument("--ontology", default=str(ONTOLOGY))
         if name == "openscene":
-            q.add_argument("--weights", default="laion400m_e32")
-            q.add_argument("--name", default="openscene_clip")
+            q.add_argument("--name", default=None, help="default: openscene_<backbone>")
         if name == "fuse-labels":
             q.add_argument("--labels", required=True)
             q.add_argument("--name", required=True)
-        if name == "compare":
-            q.add_argument("--weights", default=None)
+        if name in ("openscene", "compare"):
+            q.add_argument("--backbone", default="clip", help="clip | pe-b | pe-l | pe-s | pe-t")
+            q.add_argument("--variant", default="last_v_only", help="PE only: plain | last_v | last_v_only")
+            q.add_argument("--weights", default=None, help="open_clip tag or .pt (default per backbone)")
     a = p.parse_args()
+    if a.cmd == 'openscene' and a.name is None:
+        a.name = 'openscene_' + a.backbone.replace('-', '')
     {"check": cmd_check, "openscene": cmd_openscene, "fuse-labels": cmd_fuse_labels, "compare": cmd_compare}[a.cmd](a)
