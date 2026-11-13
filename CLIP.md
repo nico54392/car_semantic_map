@@ -75,7 +75,20 @@ Results on the RELLIS frame (work computer, 2026-11-13):
 | pe-l:last_v | 0.490 | 0.237 | 0.390 | 0.213 | 0.10 |
 | pe-l:last_v_only | 0.319 | 0.093 | 0.192 | 0.054 | 0.10 |
 
-→ `plain` is now the default variant. PE-L at the default 448 px is only ~1.3 tiles tall, try `--short_side 672`.
+→ `plain` is now the default variant.
+
+At `--short_side 672`: pe-b 2D acc 0.642 / mIoU 0.300, 3D acc 0.520 / mIoU 0.250 (0.06 s) · pe-l 0.555 / 0.264, 3D 0.461 / 0.245 (0.24 s).
+→ **PE-B, plain, 672 px is the default.** PE-L doesn't pay off.
+
+Synthetic scene, full pipeline (`scene_eval compare`):
+
+| method | Acc | mIoU | F1 | costmap MAE | μ MAE | bush | grass | mud | puddle |
+|---|---|---|---|---|---|---|---|---|---|
+| openscene_clip | 0.474 | 0.174 | 0.253 | 0.211 | 0.064 | 0.00 | 0.46 | 0.00 | 0.23 |
+| **openscene_peb** | **0.505** | **0.265** | **0.380** | **0.164** | **0.050** | 0.10 | 0.52 | 0.05 | 0.40 |
+| baseline_majority | 0.444 | 0.111 | 0.154 | 0.226 | 0.073 | 0 | 0.44 | 0 | 0 |
+
+Known issue: lots of false "rock" (= obstacle) when `rock` is in `--classes` but not in the scene.
 Note the synthetic scene has weak textures (mud is a 35 px crop), so judge backbones on the real frame first.
 
 ## Tools
