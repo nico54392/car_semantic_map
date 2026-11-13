@@ -1,6 +1,7 @@
 # car_semantic_map
 
-Stage 01: SAM3 embeddings on a known 3D map (see Obsidian `01 Map to Trajectory`).
+Stage 01: embeddings on a known 3D map (see Obsidian `01 Map to Trajectory`).
+Current path: OpenScene-style per-point CLIP embeddings, PE-Core next. Setup and run: **[CLIP.md](CLIP.md)**.
 
 Builds on Jaime's `ros2_segmentation_vlm` **without changing it**:
 - his repo is only imported (his `server/` folder goes on the Python path), never edited
@@ -25,3 +26,11 @@ export JAIME_SERVER=~/go2_ws/src/ros2_segmentation_vlm/ros2_segmentation_vlm/ser
 
 ## Tools
 - `tools/pe_probe.py`: PE dot-product test. Are SAM3's backbone features text-queryable per patch?
+- `tools/prompt_refine.py`: prompt-set coverage / redundancy on SAM3 masks
+- `car_semantic_map/fusion_core.py`: posed RGB-D + features -> voxel-averaged embedding map
+
+### CLIP / OpenScene pipeline (see [CLIP.md](CLIP.md))
+- `setup_clip.sh`, `tools/smoke_test.sh`: env + end-to-end test, no Unity needed
+- `tools/openscene_map.py`: build embedded map, text queries, cost map + A* path
+- `tools/scene_eval.py`: export sanity check + metrics vs Unity ground truth
+- `unity/SceneCapture.cs`: Unity export (posed RGB, depth, labels, labeled map)

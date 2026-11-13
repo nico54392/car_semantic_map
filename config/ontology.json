@@ -1,0 +1,25 @@
+{
+  "_note": "Same layout as the class JSON in Jaime's Go2 pipeline: id, prompts, color, traversability. Prompts are the paper's RELLIS-3D library (Table 3). ' . ' joins terms into one query (aggregation); several strings = separate queries (addition). Matched to scene.json by name, so ids here are only used for colors/ordering. traversability (0 = avoid, 1 = best) and mu are PLACEHOLDERS, the paper doesn't publish its values. traversability 0 = obstacle.",
+  "classes": [
+    {"id": 1,  "name": "dirt",     "prompts": ["trail . path . tracks"],          "color": [108, 64, 20],   "traversability": 0.8, "mu": 0.55},
+    {"id": 3,  "name": "grass",    "prompts": ["grass . lawn"],                   "color": [0, 102, 0],     "traversability": 0.7, "mu": 0.40},
+    {"id": 4,  "name": "tree",     "prompts": ["tree . branches"],                "color": [0, 255, 0],     "traversability": 0.0, "mu": null},
+    {"id": 5,  "name": "pole",     "prompts": ["pole . post"],                    "color": [0, 153, 153],   "traversability": 0.0, "mu": null},
+    {"id": 6,  "name": "water",    "prompts": ["water"],                          "color": [0, 128, 255],   "traversability": 0.0, "mu": 0.10},
+    {"id": 7,  "name": "sky",      "prompts": ["sky"],                            "color": [0, 0, 255],     "traversability": null, "mu": null},
+    {"id": 8,  "name": "vehicle",  "prompts": ["vehicle"],                        "color": [255, 255, 0],   "traversability": 0.0, "mu": null},
+    {"id": 10, "name": "asphalt",  "prompts": ["asphalt . blacktop"],             "color": [64, 64, 64],    "traversability": 1.0, "mu": 0.75},
+    {"id": 12, "name": "building", "prompts": ["building . house"],               "color": [255, 0, 0],     "traversability": 0.0, "mu": null},
+    {"id": 15, "name": "log",      "prompts": ["log . wood"],                     "color": [102, 0, 0],     "traversability": 0.0, "mu": null},
+    {"id": 17, "name": "person",   "prompts": ["person"],                         "color": [204, 153, 255], "traversability": 0.0, "mu": null},
+    {"id": 18, "name": "fence",    "prompts": ["fence"],                          "color": [102, 0, 204],   "traversability": 0.0, "mu": null},
+    {"id": 19, "name": "bush",     "prompts": ["bush . shrub"],                   "color": [255, 153, 204], "traversability": 0.2, "mu": null},
+    {"id": 23, "name": "concrete", "prompts": ["concrete"],                       "color": [170, 170, 170], "traversability": 1.0, "mu": 0.75},
+    {"id": 27, "name": "barrier",  "prompts": ["barrier . barricade"],            "color": [41, 121, 255],  "traversability": 0.0, "mu": null},
+    {"id": 31, "name": "puddle",   "prompts": ["puddle . pool"],                  "color": [134, 255, 239], "traversability": 0.3, "mu": 0.20},
+    {"id": 33, "name": "mud",      "prompts": ["mud . soil"],                     "color": [99, 66, 34],    "traversability": 0.4, "mu": 0.25},
+    {"id": 34, "name": "rubble",   "prompts": ["rubble . debris . wreckage"],     "color": [110, 22, 138],  "traversability": 0.5, "mu": 0.50},
+    {"id": 40, "name": "gravel",   "prompts": ["gravel . loose gravel"],          "color": [140, 120, 100], "traversability": 0.7, "mu": 0.50},
+    {"id": 41, "name": "rock",     "prompts": ["rock . boulder"],                 "color": [90, 90, 90],    "traversability": 0.0, "mu": null}
+  ]
+}
