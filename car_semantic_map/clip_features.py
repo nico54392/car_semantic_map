@@ -92,7 +92,7 @@ class DensePE:
     Which variant works best is an experiment: tools/backbone_compare.py.
     """
 
-    def __init__(self, model_name="PE-Core-B-16", weights="meta", variant="last_v_only",
+    def __init__(self, model_name="PE-Core-B-16", weights="meta", variant="plain",
                  short_side=448, device=None):
         import open_clip
         torch.set_grad_enabled(False)

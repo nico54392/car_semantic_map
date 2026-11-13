@@ -29,7 +29,7 @@ ONTOLOGY = ROOT / "config" / "ontology.json"
 
 # ---------------------------------------------------------------- map
 
-def build(scene_dir, weights, max_views=None, from_depth=False, voxel=0.1, backbone='clip', variant='last_v_only'):
+def build(scene_dir, weights, max_views=None, from_depth=False, voxel=0.1, backbone='clip', variant='plain'):
     from car_semantic_map.clip_features import make_extractor
     ext = make_extractor(backbone, weights, **({'variant': variant} if backbone != 'clip' else {}))
     if not from_depth:
@@ -153,7 +153,7 @@ def main():
     ap.add_argument("scene")
     ap.add_argument("texts", nargs="*")
     ap.add_argument("--backbone", default="clip", help="build only: clip | pe-b | pe-l | pe-s | pe-t")
-    ap.add_argument("--variant", default="last_v_only", help="build, PE only: plain | last_v | last_v_only")
+    ap.add_argument("--variant", default="plain", help="build, PE only: plain | last_v | last_v_only")
     ap.add_argument("--weights", default=None, help="open_clip tag or .pt (default per backbone)")
     ap.add_argument("--from-depth", action="store_true", help="build: no map.ply, back-project depth (fusion_core)")
     ap.add_argument("--voxel", type=float, default=0.1, help="build --from-depth voxel size (m)")

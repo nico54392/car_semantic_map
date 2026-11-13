@@ -155,7 +155,7 @@ if __name__ == "__main__":
             q.add_argument("--name", required=True)
         if name in ("openscene", "compare"):
             q.add_argument("--backbone", default="clip", help="clip | pe-b | pe-l | pe-s | pe-t")
-            q.add_argument("--variant", default="last_v_only", help="PE only: plain | last_v | last_v_only")
+            q.add_argument("--variant", default="plain", help="PE only: plain | last_v | last_v_only")
             q.add_argument("--weights", default=None, help="open_clip tag or .pt (default per backbone)")
     a = p.parse_args()
     if a.cmd == 'openscene' and a.name is None:

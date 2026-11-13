@@ -63,7 +63,19 @@ How the PE features are made (`DensePE` in `car_semantic_map/clip_features.py`):
 - each patch token goes through the pooling head's value path → pool MLP → projection to text space
 - variants for the last block: `plain` (unchanged), `last_v` (attention → value path), `last_v_only` (value path only, like ClearCLIP)
 
-Reference numbers (sandbox, CPU): `clip` on the RELLIS frame with Jaime's prompts = 2D acc 0.54 / mIoU 0.20, 3D acc 0.54.
+Results on the RELLIS frame (work computer, 2026-11-13):
+
+| backbone | 2D acc | 2D mIoU | 3D acc | 3D mIoU | s/frame |
+|---|---|---|---|---|---|
+| clip | 0.539 | 0.201 | 0.539 | 0.175 | 0.01 |
+| **pe-b:plain** | **0.626** | **0.289** | 0.506 | 0.243 | 0.03 |
+| pe-b:last_v | 0.625 | 0.279 | 0.529 | 0.236 | 0.03 |
+| pe-b:last_v_only | 0.339 | 0.127 | 0.321 | 0.087 | 0.03 |
+| pe-l:plain | 0.536 | 0.254 | 0.456 | 0.244 | 0.10 |
+| pe-l:last_v | 0.490 | 0.237 | 0.390 | 0.213 | 0.10 |
+| pe-l:last_v_only | 0.319 | 0.093 | 0.192 | 0.054 | 0.10 |
+
+→ `plain` is now the default variant. PE-L at the default 448 px is only ~1.3 tiles tall, try `--short_side 672`.
 Note the synthetic scene has weak textures (mud is a 35 px crop), so judge backbones on the real frame first.
 
 ## Tools
