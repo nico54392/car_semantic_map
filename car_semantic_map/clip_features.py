@@ -93,7 +93,7 @@ class DensePE:
     """
 
     def __init__(self, model_name="PE-Core-B-16", weights="meta", variant="plain",
-                 short_side=448, device=None):
+                 short_side=672, device=None):
         import open_clip
         torch.set_grad_enabled(False)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")

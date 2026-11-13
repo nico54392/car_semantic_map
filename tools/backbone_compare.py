@@ -68,7 +68,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("data"); ap.add_argument("out")
     ap.add_argument("--backbones", nargs="+", default=["clip", "pe-b:plain", "pe-b:last_v", "pe-b:last_v_only"])
-    ap.add_argument("--short_side", type=int, default=448)
+    ap.add_argument("--short_side", type=int, default=None, help="default: 448 clip, 672 PE")
     ap.add_argument("--clip_weights", default=None, help="local .pt for clip (default: download laion400m_e32)")
     a = ap.parse_args()
     data, out = Path(a.data), Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -86,7 +86,7 @@ def main():
     rows, preds = [], {}
     for spec in a.backbones:
         name, _, var = spec.partition(":")
-        kw = {"short_side": a.short_side}
+        kw = {"short_side": a.short_side} if a.short_side else {}
         if var:
             kw["variant"] = var
         ext = make_extractor(name, a.clip_weights if name == "clip" else None, **kw)
