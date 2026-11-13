@@ -1,27 +1,38 @@
 #!/usr/bin/env python3
 """
-Resolution sweep for SAM3 on terrain.
+Detail sweep for SAM3 on terrain.
 
-Question: how much does input resolution matter for terrain masks? Terrain is
-semantically coarse, so the fine (high-res) FPN level may be overkill. Lowering
-the input resolution starves that level and speeds inference. This measures the
-trade-off directly.
+Question: does terrain segmentation rely on fine image detail, or is the coarse
+semantic information enough? (Terrain is "stuff", so we expect the latter.)
 
-Per image, per resolution:
-  - run SAM3, time it (GPU-synced)
-  - build a union mask per prompt (instances above --mask-score)
-Reference = the highest resolution in the list. For each lower resolution we
-report IoU(lower-res mask, reference mask) per prompt, plus mean latency.
+NOTE ON RESOLUTION: SAM3 bakes its input resolution into the model's rotary
+position tables at build time (default 1008). Passing a smaller `resolution` to
+the processor breaks with an assert in `reshape_for_broadcast` - you'd have to
+rebuild the model to actually run at a lower resolution. So this does NOT change
+the model's resolution (and therefore does NOT measure a speedup). Instead it
+keeps the model at its native size and feeds it a DETAIL-DEGRADED image:
+downsample by a factor then upsample back, which removes fine detail while
+keeping the token grid the model expects.
 
-Read the summary as:
-  IoU near 1.0 at low res  -> terrain needs no fine detail; run low res, it's faster
-  IoU drops at low res     -> that prompt/terrain does rely on resolution
+Per image, per factor f (f<1 = coarser):
+  degraded = upsample(downsample(image, f), original_size)  ->  run SAM3
+  union mask per prompt, compared (IoU) to the full-detail (f=1.0) result.
+
+Read it as:
+  IoU stays ~1.0 as f shrinks -> terrain doesn't need fine detail; a rebuilt
+                                 low-res model would likely be safe (and faster).
+  IoU drops                   -> that terrain does rely on detail.
+
+To chase the actual speedup later, first check whether the model can be built at
+a smaller size:
+  grep -rn "image_size\\|img_size\\|resolution\\|freqs_cis" \\
+      ~/sam3/sam3/model_builder.py ~/sam3/sam3/configs/ 2>/dev/null | head
 
 Usage:
   export JAIME_SERVER=~/nico_ws/src/ros2_segmentation_vlm/ros2_segmentation_vlm/server
   python tools/resolution_sweep.py --images ~/frames \
     --prompts "grass" "dirt road . trail" "rubble . debris" "rocks . boulders" \
-    --resolutions 512 768 1008 --out out/res_sweep
+    --factors 0.25 0.5 1.0 --out out/detail_sweep
 """
 import argparse
 import csv
@@ -39,17 +50,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from car_semantic_map.jaime import add_jaime_server_to_path
 
 
+def degrade(img, f):
+    """Downsample by factor f then back to original size — strips fine detail, keeps dimensions."""
+    if f >= 1.0:
+        return img
+    w, h = img.size
+    small = img.resize((max(1, int(w * f)), max(1, int(h * f))), Image.BILINEAR)
+    return small.resize((w, h), Image.BILINEAR)
+
+
 def union_mask(results, prompt_idx, img_hw, score_thr):
-    """Union of a prompt's instance masks above score_thr, as a bool array at image size."""
     r = results[prompt_idx]
     masks, scores = r["masks"], r["scores"]
     H, W = img_hw
     out = np.zeros((H, W), dtype=bool)
     if masks.numel() == 0:
         return out
-    m = masks[:, 0] if masks.ndim == 4 else masks          # [N, h, w]
+    m = masks[:, 0] if masks.ndim == 4 else masks
     s = scores.float().cpu().numpy()
-    if tuple(m.shape[-2:]) != (H, W):                      # masks may come back at model res
+    if tuple(m.shape[-2:]) != (H, W):
         m = F.interpolate(m.float().unsqueeze(1), size=(H, W), mode="nearest").squeeze(1)
     m = m.bool().cpu().numpy()
     for i in range(m.shape[0]):
@@ -67,8 +86,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", required=True)
     ap.add_argument("--prompts", nargs="+", required=True)
-    ap.add_argument("--resolutions", nargs="+", type=int, default=[512, 768, 1008])
-    ap.add_argument("--out", default="out/res_sweep")
+    ap.add_argument("--factors", nargs="+", type=float, default=[0.25, 0.5, 1.0])
+    ap.add_argument("--out", default="out/detail_sweep")
     ap.add_argument("--jaime-server", default=None)
     ap.add_argument("--mask-score", type=float, default=0.3)
     ap.add_argument("--max-images", type=int, default=20)
@@ -85,79 +104,75 @@ def main():
 
     print("Loading SAM3...")
     model = build_sam3_image_model().to(device)
+    proc = Sam3MultiPromptProcessor(model=model, device=device, confidence_threshold=0.1)
+    with torch.inference_mode(), amp:
+        proc.set_text_prompts(args.prompts)
 
-    resolutions = sorted(set(args.resolutions))
-    ref_res = max(resolutions)
-
-    # one processor per resolution (resolution is fixed at construction time)
-    procs = {}
-    for R in resolutions:
-        p = Sam3MultiPromptProcessor(model=model, resolution=R, device=device, confidence_threshold=0.1)
-        with torch.inference_mode(), amp:
-            p.set_text_prompts(args.prompts)
-        procs[R] = p
+    factors = sorted(set(args.factors))
+    ref_f = max(factors)  # the most detail = reference
 
     paths = sorted(q for q in Path(args.images).iterdir()
                    if q.suffix.lower() in {".png", ".jpg", ".jpeg"})[: args.max_images]
     if not paths:
         sys.exit(f"No images in {args.images}")
 
-    # warmup: the first GPU call at each resolution is slow and would skew timing
-    warm = Image.open(paths[0]).convert("RGB")
-    for R in resolutions:
-        with torch.inference_mode(), amp:
-            procs[R].segment_image_with_text_prompts(warm)
+    # warmup
+    with torch.inference_mode(), amp:
+        proc.segment_image_with_text_prompts(Image.open(paths[0]).convert("RGB"))
     if device == "cuda":
         torch.cuda.synchronize()
 
-    rows = []
-    lat = {R: [] for R in resolutions}
+    rows, lat = [], {f: [] for f in factors}
     for ip in paths:
         img = Image.open(ip).convert("RGB")
         hw = (img.height, img.width)
-        masks_by_res = {}
-        for R in resolutions:
+        masks_by_f = {}
+        for f in factors:
+            di = degrade(img, f)
             if device == "cuda":
                 torch.cuda.synchronize()
             t0 = time.perf_counter()
             with torch.inference_mode(), amp:
-                res = procs[R].segment_image_with_text_prompts(img)
+                res = proc.segment_image_with_text_prompts(di)
             if device == "cuda":
                 torch.cuda.synchronize()
-            lat[R].append((time.perf_counter() - t0) * 1000.0)  # ms
-            masks_by_res[R] = [union_mask(res, i, hw, args.mask_score) for i in range(len(args.prompts))]
+            lat[f].append((time.perf_counter() - t0) * 1000.0)
+            masks_by_f[f] = [union_mask(res, i, hw, args.mask_score) for i in range(len(args.prompts))]
 
-        ref = masks_by_res[ref_res]
+        ref = masks_by_f[ref_f]
         for i, prompt in enumerate(args.prompts):
-            for R in resolutions:
-                m = masks_by_res[R][i]
-                rows.append({
-                    "image": ip.name, "prompt": prompt, "resolution": R,
-                    "mask_px": int(m.sum()),
-                    "iou_vs_ref": 1.0 if R == ref_res else round(iou(m, ref[i]), 3),
-                })
-        print(f"[{ip.name}] " + "  ".join(f"{R}:{lat[R][-1]:.0f}ms" for R in resolutions))
+            for f in factors:
+                m = masks_by_f[f][i]
+                rows.append({"image": ip.name, "prompt": prompt, "detail_factor": f,
+                             "mask_px": int(m.sum()),
+                             "iou_vs_full": 1.0 if f == ref_f else round(iou(m, ref[i]), 3)})
+        print(f"[{ip.name}] done")
 
-    with open(out / "results.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+    with open(out / "results.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
 
-    # summary: average only over (image, prompt) pairs where the reference mask was non-empty
     ref_nonempty = {(r["image"], r["prompt"]) for r in rows
-                    if r["resolution"] == ref_res and r["mask_px"] > 0}
-    print(f"\nReference resolution: {ref_res}   (prompts with a non-empty ref mask: {len(ref_nonempty)})")
-    print("  res  | mean latency | mean IoU vs ref | speedup")
-    base_lat = np.mean(lat[ref_res])
-    for R in resolutions:
-        ius = [r["iou_vs_ref"] for r in rows
-               if r["resolution"] == R and (r["image"], r["prompt"]) in ref_nonempty]
-        mlat = np.mean(lat[R])
+                    if r["detail_factor"] == ref_f and r["mask_px"] > 0}
+    print(f"\nReference = full detail (factor {ref_f}).  prompts with non-empty ref mask: {len(ref_nonempty)}")
+    print("  factor | mean IoU vs full detail   (1.0 = unchanged)")
+    for f in factors:
+        ius = [r["iou_vs_full"] for r in rows
+               if r["detail_factor"] == f and (r["image"], r["prompt"]) in ref_nonempty]
         miou = np.nanmean(ius) if ius else float("nan")
-        print(f"  {R:>4} | {mlat:8.0f} ms | {miou:>13.3f} | {base_lat / mlat:4.1f}x")
+        print(f"  {f:>5} | {miou:.3f}")
 
-    print(f"\nPer-prompt detail: {out}/results.csv")
-    print("If IoU stays ~0.9+ at 512, terrain doesn't need the fine level -> run 512 for the speedup.")
+    print("\nPer-prompt, how detail-sensitive (mean IoU vs full at the smallest factor):")
+    small = min(factors)
+    per = {}
+    for r in rows:
+        if r["detail_factor"] == small and (r["image"], r["prompt"]) in ref_nonempty:
+            per.setdefault(r["prompt"], []).append(r["iou_vs_full"])
+    for p, v in sorted(per.items(), key=lambda x: np.nanmean(x[1])):
+        print(f"  {np.nanmean(v):.3f}  {p}")
+    print(f"\nDetail in {out}/results.csv")
+    print("High IoU at small factors = terrain robust to losing detail (a low-res rebuild would likely be safe).")
 
 
 if __name__ == "__main__":
