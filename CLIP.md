@@ -99,6 +99,8 @@ Note the synthetic scene has weak textures (mud is a 35 px crop), so judge backb
 | `tools/openscene_map.py build <scene> --from-depth` | No `map.ply`: back-project depth with `fusion_core.fuse_views` (voxel average) |
 | `tools/openscene_map.py query <scene> "mud" ...` | Heatmap per text query |
 | `tools/openscene_map.py plan <scene> --start x y --goal x y` | Class probs → traversability/μ → cost map → A* (`--cell`, `--classes`) |
+| `tools/goal_from_prompt.py <scene> "go to the bench" --start x y` | Prompt → 3D mask → object → goal → A* path → `goals/<prompt>/path.json` (ROS + Unity coords), `mask.ply`, `goal.png` |
+| `tools/ros2_follow_path.py --ros-args -p path_file:=...` | ROS2 pure pursuit on that path → `/cmd_vel`, pose from `/odom_unity` |
 | `tools/scene_eval.py openscene / fuse-labels / compare` | Score methods against Unity GT with Jaime's metrics (+ obstacle F1, cost-map MAE, μ MAE) |
 | `tools/make_synthetic.py` | Fake Unity export for testing |
 | `tools/rellis_frame_test.py` | Single real frame, 2D + 3D zero-shot test (CLIP only, original test) |

@@ -15,7 +15,11 @@ echo "== 5. embedded map";           python tools/openscene_map.py build $S
 echo "== 6. text queries";           python tools/openscene_map.py query $S "standing water" "mud" "tall bushes"
 echo "== 7. cost map + path";        python tools/openscene_map.py plan $S --start 5 -5 --goal 35 -35 --cell 0.5 \
                                        --classes grass mud puddle bush dirt gravel rock
-echo "== 8. metrics vs GT";          python tools/scene_eval.py openscene $S
+echo "== 8. prompt -> goal -> path"; python tools/goal_from_prompt.py $S "go to the puddle" --start 5 -5 \
+                                       --classes grass mud puddle bush dirt gravel
+                                     python tools/goal_from_prompt.py $S "standing water" --start 5 -5 \
+                                       --classes grass mud puddle bush dirt gravel
+echo "== 9. metrics vs GT";          python tools/scene_eval.py openscene $S
                                      python tools/scene_eval.py compare $S
 echo
-echo "Done. Look at: out/rellis_frame/*.png, $S/query.png, $S/plan.png, $S/compare_*.png, $S/report.md"
+echo "Done. Look at: out/rellis_frame/*.png, $S/query.png, $S/plan.png, $S/goals/*/goal.png, $S/compare_*.png, $S/report.md"

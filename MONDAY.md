@@ -7,15 +7,16 @@ Same plan as Obsidian `01 Monday Plan`. Details: [CLIP.md](CLIP.md).
 
 ---
 ## Before Monday (Claude)
-- [ ] `tools/goal_from_prompt.py`: text → per-point score → threshold + cluster → object position → nearest free cell next to it → A* path. Also prints the 3D mask for prompts that weren't in the ontology (2nd "Done when")
-- [ ] Path export: waypoints in Unity coords + ROS (FLU) coords, JSON/CSV
-- [ ] Simple ROS2 follower (pure pursuit on the waypoints → `/cmd_vel`), using whatever pose topic Unity publishes
-- [ ] Object classes in `ontology.json` (bench, tree, building, car…) with prompts + traversability 0
-- [ ] Test all of it on the synthetic scene
+- [x] `tools/goal_from_prompt.py`: prompt → 3D mask (prompt vs all ontology classes, synonyms dropped) → blobs → goal on the ring around the object, closest to the start → A* path. Works for prompts not in the ontology
+- [x] Path export: `goals/<prompt>/path.json` (ROS + Unity coords), `path.csv`, `mask.ply`, `goal.png`
+- [x] `tools/ros2_follow_path.py`: pure pursuit → `/cmd_vel`, pose from `/odom_unity` (default)
+- [x] Object classes in `ontology.json` (bench, car, table, sign, door, wall, trash can) + RELLIS tree/building/vehicle/person
+- [x] Tested on the synthetic scene: "go to the puddle" and "standing water" (not in ontology) → goal + path; simulated robot reaches the goal, ≤0.23 m off the path
 
 ## Before Monday (Nico, if there's time)
-- [ ] Check what the Unity robot publishes: `ros2 topic list` with the sim running. Need a pose (`/odom`, `/tf` or a pose topic) for the follower
-- [ ] Where does the `/cmd_vel` driver script live, and does it take `geometry_msgs/Twist`?
+- [x] Pose: `car_sim/Assets/Scripts/Publishers + Nav2/Nav2Publisher.cs` → `nav_msgs/Odometry` on `/odom_unity` (TF on `/tf_unity`). Same (z,-x,y) conversion as the map export → same frame, no offset
+- [x] `/cmd_vel` driver: `car_sim/Assets/CAR/Scripts/CmdVelDriver.cs`, `geometry_msgs/Twist`, gives control back to the keyboard after 0.5 s of silence
+- [ ] Confirm live: with the sim running, `ros2 topic list | grep -E "odom_unity|cmd_vel"` and `ros2 topic echo /odom_unity --once`
 
 ---
 ## Monday
@@ -58,15 +59,24 @@ python tools/scene_eval.py openscene $S --backbone pe-b && python tools/scene_ev
 - [ ] `report.md`: first real numbers against Unity ground truth
 
 ### 6. Prompt → path (~30 min)
+Start = robot spawn in the map frame: `ros2 topic echo /odom_unity --once` → `pose.pose.position.x/y`.
 ```bash
-python tools/goal_from_prompt.py $S "go to the bench" --start <spawn x y>
-python tools/goal_from_prompt.py $S "picnic table"      # NOT in the ontology → 3D mask still?
+python tools/goal_from_prompt.py $S "go to the bench" --start <x> <y>
+python tools/goal_from_prompt.py $S "picnic table" --start <x> <y>    # NOT in the ontology → 3D mask still?
 ```
+Look at `$S/goals/<prompt>/goal.png`. Knobs: `--thresh` (mask), `--pick nearest`, `--standoff` (m from object), `--synonym`.
+Open `mask.ply` in CloudCompare to see the 3D mask.
 - [ ] Path goes to the bench and around bad terrain
 - [ ] An unseen prompt gives a sensible 3D mask (2nd "Done when")
 
 ### 7. Drive it (~1 h)
-- [ ] Sim running, follower node gets the waypoints, publishes `/cmd_vel`
+```bash
+source /opt/ros/humble/setup.bash          # same ROS_DOMAIN_ID / CycloneDDS as the Unity bridge
+python3 tools/ros2_follow_path.py --ros-args -p path_file:=$S/goals/bench/path.json
+```
+- [ ] First log line prints the robot pose and the path start: they should be close. If yaw looks off, `-p heading_offset_deg:=90` (or -90/180)
+- [ ] Too twitchy / cuts corners: `-p lookahead:=1.2 -p v_max:=0.3`
+- [ ] Follower needs `rclpy` → run it with the system ROS python, not inside `nico_clip`
 - [ ] Robot reaches the bench → **record it** (screen capture for Jaime)
 
 ## Bring back
