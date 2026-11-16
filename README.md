@@ -1,7 +1,7 @@
 # car_semantic_map
 
 Stage 01: embeddings on a known 3D map (see Obsidian `01 Map to Trajectory`).
-Current path: OpenScene-style per-point CLIP embeddings, PE-Core next. Setup and run: **[CLIP.md](CLIP.md)**.
+Current path: OpenScene-style per-point embeddings (2D fusion, CLIP / PE-Core): **[CLIP.md](CLIP.md)**. Official OpenScene 3D model on our point clouds: **[OPENSCENE3D.md](OPENSCENE3D.md)**.
 
 Builds on Jaime's `ros2_segmentation_vlm` **without changing it**:
 - his repo is only imported (his `server/` folder goes on the Python path), never edited
