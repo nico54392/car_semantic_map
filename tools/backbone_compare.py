@@ -61,7 +61,7 @@ def lidar_to_pixels(data, IH, IW):
     np.minimum.at(zb, (ci[:, 1], ci[:, 0]), pc[inside, 2])
     vis = inside.copy()
     vis[inside] = pc[inside, 2] <= zb[ci[:, 1], ci[:, 0]] * 1.05 + 0.3
-    return uv[vis], lab[vis]
+    return uv[vis], lab[vis], np.nonzero(vis)[0]      # idx = position in the (norm > 0.5) point list
 
 
 def main():
@@ -69,6 +69,8 @@ def main():
     ap.add_argument("data"); ap.add_argument("out")
     ap.add_argument("--backbones", nargs="+", default=["clip", "pe-b:plain", "pe-b:last_v", "pe-b:last_v_only"])
     ap.add_argument("--short_side", type=int, default=None, help="default: 448 clip, 672 PE")
+    ap.add_argument("--save_dir", default=None, help="save per-point class probs on the visible LiDAR points "
+                                                     "(for tools/ensemble_eval.py)")
     ap.add_argument("--clip_weights", default=None, help="local .pt for clip (default: download laion400m_e32)")
     a = ap.parse_args()
     data, out = Path(a.data), Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,7 @@ def main():
     gt = np.array(Image.open(data / f"{FRAME}.png"))
     EH, EW = 300, 480
     gt_s = cv2.resize(gt, (EW, EH), interpolation=cv2.INTER_NEAREST)
-    uv, lab3 = lidar_to_pixels(data, IH, IW)
+    uv, lab3, vis_idx = lidar_to_pixels(data, IH, IW)
 
     rows, preds = [], {}
     for spec in a.backbones:
@@ -103,6 +105,11 @@ def main():
         g = torch.from_numpy(np.stack([(uv[:, 0] + .5) / IW * 2 - 1, (uv[:, 1] + .5) / IH * 2 - 1], -1)).float()[None, None]
         pc = F.grid_sample(cls[None], g, align_corners=False)[0, :, 0]
         p3 = np.array(ids)[pc.argmax(0).numpy()]
+        if a.save_dir:
+            sd = Path(a.save_dir) / spec.replace(":", "_"); sd.mkdir(parents=True, exist_ok=True)
+            np.save(sd / "prob.npy", (pc.T * 100).softmax(1).half().numpy())
+            np.save(sd / "idx.npy", vis_idx)
+            json.dump([RELLIS[i] for i in ids], open(sd / "classes.json", "w"))
         acc3, miou3, iou3 = scores(lab3, p3)
         rows.append(dict(backbone=spec, acc2d=acc2, miou2d=miou2, acc3d=acc3, miou3d=miou3, sec=dt,
                          grid=f"{fm.shape[1]}x{fm.shape[2]}", iou3d=iou3))
