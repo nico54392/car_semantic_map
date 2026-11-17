@@ -1,11 +1,11 @@
-# CLIP / OpenScene pipeline on the work computer
+# 2D feature-fusion pipeline (CLIP / PE) on the work computer
 
-Per-point CLIP embeddings on the map (OpenScene 2D fusion) → text queries → traversability cost map → A* path.
+Per-point CLIP embeddings on the map (2D feature fusion) → text queries → traversability cost map → A* path.
 CLIP first to get it running, then PE-Core (`--backbone pe-b / pe-l`, section 5).
 
 You don't need the OpenScene repo for this: its 3D network needs MinkowskiEngine, and the fusion step is
 reimplemented here. Keep the clone around for reference (their `scripts/feature_fusion/` is what
-`openscene_fusion.py` follows).
+`feature_fusion.py` follows).
 
 ## 1. Get the code
 ```bash
@@ -50,9 +50,9 @@ python tools/backbone_compare.py data/rellis_sample out/backbones \
 ```
 Bring back the terminal table + `out/backbones/backbones.png`. Then use the winner:
 ```bash
-python tools/openscene_map.py build out/synth01 --backbone pe-l --variant <best>
-python tools/openscene_map.py plan  out/synth01 --start 5 -5 --goal 35 -35 --classes grass mud puddle bush dirt gravel rock
-python tools/scene_eval.py openscene out/synth01 --backbone pe-l --variant <best>
+python tools/feature_map.py build out/synth01 --backbone pe-l --variant <best>
+python tools/feature_map.py plan  out/synth01 --start 5 -5 --goal 35 -35 --classes grass mud puddle bush dirt gravel rock
+python tools/scene_eval.py fuse out/synth01 --backbone pe-l --variant <best>
 python tools/scene_eval.py compare   out/synth01
 ```
 `query`/`plan` pick the text encoder from the map file automatically, so they always match how the map was built.
@@ -84,8 +84,8 @@ Synthetic scene, full pipeline (`scene_eval compare`):
 
 | method | Acc | mIoU | F1 | costmap MAE | μ MAE | bush | grass | mud | puddle |
 |---|---|---|---|---|---|---|---|---|---|
-| openscene_clip | 0.474 | 0.174 | 0.253 | 0.211 | 0.064 | 0.00 | 0.46 | 0.00 | 0.23 |
-| **openscene_peb** | **0.505** | **0.265** | **0.380** | **0.164** | **0.050** | 0.10 | 0.52 | 0.05 | 0.40 |
+| fused_clip | 0.474 | 0.174 | 0.253 | 0.211 | 0.064 | 0.00 | 0.46 | 0.00 | 0.23 |
+| **fused_peb** | **0.505** | **0.265** | **0.380** | **0.164** | **0.050** | 0.10 | 0.52 | 0.05 | 0.40 |
 | baseline_majority | 0.444 | 0.111 | 0.154 | 0.226 | 0.073 | 0 | 0.44 | 0 | 0 |
 
 Known issue: lots of false "rock" (= obstacle) when `rock` is in `--classes` but not in the scene.
@@ -95,13 +95,13 @@ Note the synthetic scene has weak textures (mud is a 35 px crop), so judge backb
 | Command | What |
 |---|---|
 | `tools/scene_eval.py check <scene>` | Projects the labeled map into the label images. Run on every new export. ~98% + OK = conventions right |
-| `tools/openscene_map.py build <scene>` | CLIP features fused onto `map.ply` → `embedded_map.npz` |
-| `tools/openscene_map.py build <scene> --from-depth` | No `map.ply`: back-project depth with `fusion_core.fuse_views` (voxel average) |
-| `tools/openscene_map.py query <scene> "mud" ...` | Heatmap per text query |
-| `tools/openscene_map.py plan <scene> --start x y --goal x y` | Class probs → traversability/μ → cost map → A* (`--cell`, `--classes`) |
+| `tools/feature_map.py build <scene>` | CLIP features fused onto `map.ply` → `embedded_map.npz` |
+| `tools/feature_map.py build <scene> --from-depth` | No `map.ply`: back-project depth with `fusion_core.fuse_views` (voxel average) |
+| `tools/feature_map.py query <scene> "mud" ...` | Heatmap per text query |
+| `tools/feature_map.py plan <scene> --start x y --goal x y` | Class probs → traversability/μ → cost map → A* (`--cell`, `--classes`) |
 | `tools/goal_from_prompt.py <scene> "go to the bench" --start x y` | Prompt → 3D mask → object → goal → A* path → `goals/<prompt>/path.json` (ROS + Unity coords), `mask.ply`, `goal.png` |
 | `tools/ros2_follow_path.py --ros-args -p path_file:=...` | ROS2 pure pursuit on that path → `/cmd_vel`, pose from `/odom_unity` |
-| `tools/scene_eval.py openscene / fuse-labels / compare` | Score methods against Unity GT with Jaime's metrics (+ obstacle F1, cost-map MAE, μ MAE) |
+| `tools/scene_eval.py fuse / fuse-labels / compare` | Score methods against Unity GT with Jaime's metrics (+ obstacle F1, cost-map MAE, μ MAE) |
 | `tools/make_synthetic.py` | Fake Unity export for testing |
 | `tools/rellis_frame_test.py` | Single real frame, 2D + 3D zero-shot test (CLIP only, original test) |
 | `tools/backbone_compare.py` | Same frame, several backbones / variants side by side |
@@ -124,7 +124,7 @@ If we go with Unity Perception / SOLO instead, the SOLO loader just has to produ
 
 ## Code
 - `car_semantic_map/clip_features.py`: `DenseCLIP`, `DensePE`, `make_extractor('clip' | 'pe-b' | 'pe-l' ...)`. GPU if available
-- `car_semantic_map/openscene_fusion.py`: project map points into views (depth-checked), average features; label majority vote
+- `car_semantic_map/feature_fusion.py`: project map points into views (depth-checked), average features; label majority vote
 - `car_semantic_map/scene_io.py`: scene loader, projection, `check_conventions`
 - `car_semantic_map/evaluate.py`: metrics, cost map
 - `config/ontology.json`: Jaime's class JSON layout + his RELLIS prompts. **Traversability / μ are placeholders**

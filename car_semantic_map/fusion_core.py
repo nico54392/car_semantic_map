@@ -1,6 +1,6 @@
 """
 Fusion core: turn posed RGB-D views (+ per-pixel features) into a 3D map where
-every point carries a fused feature vector. This is OpenScene/ConceptFusion
+every point carries a fused feature vector. This is the 2D-fusion idea from OpenScene/ConceptFusion
 step 1, and it's independent of any file format — the Perception/SOLO loader is
 a thin adapter that calls fuse_views() with plain arrays.
 

@@ -75,7 +75,7 @@ def load_scene(root, max_views=None, need_map=True) -> Scene:
 
 
 def project(points, view: View, depth_tol_abs=0.15, depth_tol_rel=0.03, border=2):
-    """OpenScene's PointCloudToImageMapper, with an absolute+relative depth tolerance
+    """Same projection logic as OpenScene's PointCloudToImageMapper (our code), with an absolute+relative depth tolerance
     instead of their 25%-of-depth one (too loose outdoors: 5 m at 20 m range).
 
     returns u, v (float pixel coords), visible mask

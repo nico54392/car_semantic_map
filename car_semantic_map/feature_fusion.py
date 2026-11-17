@@ -1,6 +1,6 @@
 """Lift 2D stuff onto the map points.
 
-fuse_features: OpenScene 2D fusion (average per-pixel embeddings over all views that see a point)
+fuse_features: 2D feature fusion (average per-pixel embeddings over all views that see a point)
 fuse_labels:   majority vote of per-view 2D label maps (e.g. plain SAM3 masks -> class ids)
 """
 import time

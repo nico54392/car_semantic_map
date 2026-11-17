@@ -14,7 +14,7 @@ the competitors.
 
 Then: mask points -> xy grid -> connected blobs -> pick one (largest, or nearest to start) ->
 goal = free cell on the ring around the blob that's closest to the start -> A* on the
-traversability cost map (same as openscene_map.py plan).
+traversability cost map (same as feature_map.py plan).
 
 Outputs in <scene>/goals/<slug>/:
   path.json   waypoints in ROS (FLU) and Unity coords, goal, object centroid, clusters
@@ -31,7 +31,7 @@ from scipy import ndimage
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(Path(__file__).parent))
-from openscene_map import EmbeddedMap, grid, astar, ONTOLOGY   # noqa: E402
+from feature_map import EmbeddedMap, grid, astar, ONTOLOGY   # noqa: E402
 
 FILLER = r"^(please\s+)?((go|drive|move|navigate|head)\s+(to|towards|toward)\s+)?(the|a|an)?\s*"
 
@@ -121,7 +121,7 @@ def main():
         print("nothing found. Top-1% points are mostly claimed by:", losers, "-> try --thresh lower or another wording")
         sys.exit(1)
 
-    # 2. cost map (same rule as openscene_map.py plan)
+    # 2. cost map (same rule as feature_map.py plan)
     names, probs = m.classify(a.classes)
     trav, _ = m.properties(names, probs, "traversability")
     if not in_onto:

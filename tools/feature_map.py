@@ -1,11 +1,11 @@
 """
-OpenScene-style embedded map -> text queries -> traversability cost map -> path.
-This is "01 Map to Trajectory" with OpenScene as the semantic layer.
+2D-fusion embedded map -> text queries -> traversability cost map -> path.
+This is "01 Map to Trajectory" with fused 2D features as the semantic layer.
 
-python tools/openscene_map.py build <scene>                 # CLIP features fused onto map.ply -> <scene>/embedded_map.npz
-python tools/openscene_map.py build <scene> --from-depth    # no map.ply: build the map from the depth images (fusion_core)
-python tools/openscene_map.py query <scene> "wet mud" "standing water"     # heatmaps on the map
-python tools/openscene_map.py plan  <scene> --start x y --goal x y [--cell 0.2] [--classes grass mud ...]
+python tools/feature_map.py build <scene>                 # CLIP features fused onto map.ply -> <scene>/embedded_map.npz
+python tools/feature_map.py build <scene> --from-depth    # no map.ply: build the map from the depth images (fusion_core)
+python tools/feature_map.py query <scene> "wet mud" "standing water"     # heatmaps on the map
+python tools/feature_map.py plan  <scene> --start x y --goal x y [--cell 0.2] [--classes grass mud ...]
 
 --backbone clip | pe-b | pe-l (build only; query/plan use whatever the map was built with).
 --weights: open_clip tag or .pt path, default per backbone (laion400m_e32 / meta).
@@ -33,8 +33,8 @@ def build(scene_dir, weights, max_views=None, from_depth=False, voxel=0.1, backb
     from car_semantic_map.clip_features import make_extractor
     ext = make_extractor(backbone, weights, **({'variant': variant} if backbone != 'clip' else {}))
     if not from_depth:
-        # OpenScene: project the given map (map.ply) into every view
-        from car_semantic_map.openscene_fusion import fuse_features
+        # project the given map (map.ply) into every view
+        from car_semantic_map.feature_fusion import fuse_features
         s = load_scene(scene_dir, max_views)
         feat, count, t = fuse_features(s, ext)
         pts, feat = s.points, feat.numpy()

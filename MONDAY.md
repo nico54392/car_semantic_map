@@ -1,5 +1,5 @@
 # 01 Monday Plan: Unity export → prompt → robot drives there
-Same plan as Obsidian `01 Monday Plan`. Details: [CLIP.md](CLIP.md).
+Same plan as Obsidian `01 Monday Plan`. Details: [FUSION.md](FUSION.md).
 
 **Goal for Monday:** first real Unity export through the whole chain, ending with "go to the bench" → path → robot drives it in Unity. That's the first "Done when" in the hub.
 
@@ -51,9 +51,9 @@ python tools/scene_eval.py check ~/nico_ws/scenes/unity01
 ### 5. Embedded map + sanity queries (~15 min)
 ```bash
 S=~/nico_ws/scenes/unity01
-python tools/openscene_map.py build $S --backbone pe-b
-python tools/openscene_map.py query $S "grass" "mud" "dirt path" "bench" "tree"
-python tools/scene_eval.py openscene $S --backbone pe-b && python tools/scene_eval.py compare $S --backbone pe-b
+python tools/feature_map.py build $S --backbone pe-b
+python tools/feature_map.py query $S "grass" "mud" "dirt path" "bench" "tree"
+python tools/scene_eval.py fuse $S --backbone pe-b && python tools/scene_eval.py compare $S --backbone pe-b
 ```
 - [ ] `query.png`: does "bench" light up the bench?
 - [ ] `report.md`: first real numbers against Unity ground truth
