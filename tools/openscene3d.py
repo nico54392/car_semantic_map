@@ -23,6 +23,7 @@ Inputs
   --pth FILE     OpenScene processed file (locs, colors, labels)
 Classes
   default: ontology.json classes present in the GT (or --classes), prompts from the ontology
+  --classes rellis      all 19 RELLIS classes (same competition as backbone_compare.py)
   --labelset nuscenes   the 16 nuScenes classes the model was evaluated on
 Outputs in --out: feat.npy (fp16 per-point features), pred.npy, pred.ply (colored), bev.png,
   query_<text>.png / .ply, metrics.json (if GT)
@@ -37,6 +38,13 @@ RELLIS = {1: "dirt", 3: "grass", 4: "tree", 5: "pole", 6: "water", 7: "sky", 8: 
           27: "barrier", 31: "puddle", 33: "mud", 34: "rubble"}
 NUSC16 = ["barrier", "bicycle", "bus", "car", "construction vehicle", "motorcycle", "person", "traffic cone",
           "trailer", "truck", "driveable surface", "other flat", "sidewalk", "terrain", "manmade", "vegetation"]
+# nuScenes classes -> RELLIS classes they cover, to score the nuScenes labelset on RELLIS
+NUSC_TO_RELLIS = {"vegetation": ["tree", "bush"], "terrain": ["grass", "mud", "dirt", "rubble"],
+                  "driveable surface": ["asphalt", "concrete", "puddle"], "sidewalk": ["concrete", "asphalt"],
+                  "other flat": ["concrete", "asphalt", "puddle", "water"], "manmade": ["fence", "building", "pole", "barrier", "object"],
+                  "person": ["person"], "car": ["vehicle"], "truck": ["vehicle"], "bus": ["vehicle"], "trailer": ["vehicle"],
+                  "construction vehicle": ["vehicle"], "barrier": ["barrier", "fence"], "bicycle": ["object"],
+                  "motorcycle": ["vehicle"], "traffic cone": ["object"]}
 MODELS = {"nuscenes": "https://cvg-data.inf.ethz.ch/openscene/models/nuscenes_openseg.pth.tar",
           "scannet": "https://cvg-data.inf.ethz.ch/openscene/models/scannet_openseg.pth.tar",
           "matterport": "https://cvg-data.inf.ethz.ch/openscene/models/matterport_openseg.pth.tar"}
@@ -145,7 +153,9 @@ def main():
     if a.labelset == "nuscenes":
         names = NUSC16; prompts = [[n] for n in names]
     else:
-        if a.classes:
+        if a.classes == ["rellis"]:                     # all 19 RELLIS classes, same competition as backbone_compare
+            names = [RELLIS[i] for i in sorted(RELLIS)]
+        elif a.classes:
             names = a.classes
         elif gt is not None and id2name:
             names = [id2name[int(c)] for c in np.unique(gt) if int(c) in id2name and id2name[int(c)] not in ("void", "sky")]
@@ -157,6 +167,8 @@ def main():
     pred_idx = logits.argmax(1).cpu().numpy()
     pred = np.array(names)[pred_idx]
     np.save(out / "pred.npy", pred_idx)
+    np.save(out / "prob.npy", (logits * 100).softmax(1).half().cpu().numpy())   # for tools/ensemble_eval.py
+    json.dump(names, open(out / "classes.json", "w"))
     print("classes:", names)
 
     # --- score vs GT (by name) ---
@@ -165,6 +177,8 @@ def main():
         gname = np.array([id2name.get(int(c), "void") for c in gt])
         valid = ~np.isin(gname, ["void", "sky"])
         g, p = gname[valid], pred[valid]
+        if a.labelset == "nuscenes":                    # a prediction is right if its nuScenes class covers the GT class
+            p = np.array([gg if gg in NUSC_TO_RELLIS.get(pp, []) else "nusc:" + pp for gg, pp in zip(g, p)])
         ious = {}
         for n in np.unique(g):
             ious[n] = float(((g == n) & (p == n)).sum() / max(((g == n) | (p == n)).sum(), 1))
