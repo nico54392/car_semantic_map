@@ -185,4 +185,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if torch.cuda.is_available():                 # SAM3 expects bf16 autocast around every call
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            main()
+    else:
+        main()
