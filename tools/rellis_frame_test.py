@@ -1,10 +1,10 @@
 """
-OpenScene-style 2D->3D open-vocabulary test on a real off-road frame (RELLIS-3D sample).
+2D->3D open-vocabulary test (2D feature fusion, our code) on a real off-road frame (RELLIS-3D sample).
 
-Pipeline (mirrors OpenScene's "2D fusion" branch, no training):
+Pipeline (same idea as the 2D-fusion branch in the OpenScene paper, no training):
   1. dense, text-aligned per-pixel features from CLIP (ClearCLIP-style last layer,
      standing in for OpenSeg/LSeg which we can't download here)
-  2. project LiDAR points into the image (OpenScene PointCloudToImageMapper logic + occlusion check)
+  2. project LiDAR points into the image (point -> pixel projection + occlusion check)
   3. each 3D point gets a 512-d CLIP embedding -> query with ANY text afterwards
   4. text query -> class probs -> friction / traversability lookup
 
@@ -114,7 +114,7 @@ def iou_table(gt, pr):
 
 iou2d, acc2d = iou_table(gt_s, pred2d)
 
-# ---------------- 3D: OpenScene-style point -> pixel mapping ----------------
+# ---------------- 3D: point -> pixel mapping ----------------
 def load_RT(path, key):
     d = yaml.safe_load(open(path))[key]; q, t = d["q"], d["t"]
     T = np.eye(4); T[:3, :3] = Rotation.from_quat([q["x"], q["y"], q["z"], q["w"]]).as_matrix()
@@ -133,7 +133,7 @@ uv = np.full((len(pts), 2), -1.0)
 uv[front] = cv2.projectPoints(pts[front], cv2.Rodrigues(RT[:3, :3])[0], RT[:3, 3], K, dist)[0][:, 0]
 inside = front & (uv[:, 0] >= 10) & (uv[:, 0] < IW - 10) & (uv[:, 1] >= 10) & (uv[:, 1] < IH - 10)
 
-# occlusion: with Unity you'd use the rendered depth image (exactly OpenScene's depth test).
+# occlusion: with Unity you'd use the rendered depth image (a depth test).
 # here we only have sparse LiDAR, so build a coarse z-buffer from the points themselves.
 CELL = 12
 zb = np.full((IH // CELL + 1, IW // CELL + 1), np.inf)
@@ -143,7 +143,7 @@ vis = inside.copy()
 vis[inside] = pc[inside, 2] <= zb[ci[:, 1], ci[:, 0]] * 1.05 + 0.3
 print(f"points: {len(pts)}, in camera FOV: {inside.sum()}, visible after occlusion test: {vis.sum()}")
 
-# sample per-point embeddings (this is what OpenScene stores per point)
+# sample per-point embeddings (the fused feature each point stores)
 gh, gw = feat.shape[1:]
 grid = torch.from_numpy(np.stack([uv[vis, 0] / IW * 2 - 1, uv[vis, 1] / IH * 2 - 1], -1)).float()[None, None]
 pfeat = F.normalize(F.grid_sample(feat[None], grid, align_corners=False)[0, :, 0].T, dim=-1)  # [Nv,512]
@@ -165,7 +165,7 @@ gmask = ~np.isnan(gt_mu) & ~np.isnan(mu_hard)
 mu_err_hard = float(np.abs(mu_hard[gmask] - gt_mu[gmask]).mean())
 mu_err_exp = float(np.abs(mu_exp[gmask] - gt_mu[gmask]).mean())
 
-# property queries on points (OpenScene "somewhere soft" style)
+# property queries on points ("somewhere soft" style)
 pq = (pfeat @ T_prop.T).numpy()
 
 # ---------------- timing of a query against the stored embeddings ----------------

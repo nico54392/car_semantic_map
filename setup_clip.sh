@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup for the CLIP / OpenScene pipeline. Separate env so nothing here
+# One-time setup for the 2D feature-fusion pipeline. Separate env so nothing here
 # can break the SAM3 env (open_clip pulls timm, which sam3 may pin).
 # usage: source setup_clip.sh [env_to_clone]     (default: nico_sam3, it already has torch + CUDA)
 # no set -e: this file is sourced, an error would close the terminal

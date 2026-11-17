@@ -2,7 +2,7 @@
 Check a scene export and score methods against its ground truth.
 
 python tools/scene_eval.py check       <scene>
-python tools/scene_eval.py openscene   <scene> [--backbone clip|pe-b|pe-l] [--variant last_v_only]
+python tools/scene_eval.py fuse   <scene> [--backbone clip|pe-b|pe-l] [--variant last_v_only]
 python tools/scene_eval.py fuse-labels <scene> --labels <dir with 000000.png ...> --name sam3_vote
 python tools/scene_eval.py compare     <scene> [--backbone clip]   (text encoder used for SCS / SwCM)
 
@@ -39,9 +39,9 @@ def cmd_check(a):
     check_conventions(s)
 
 
-def cmd_openscene(a):
+def cmd_fuse(a):
     from car_semantic_map.clip_features import make_extractor
-    from car_semantic_map.openscene_fusion import fuse_features, classify
+    from car_semantic_map.feature_fusion import fuse_features, classify
     s = load_scene(a.scene, a.max_views)
     ids, prompts = scene_prompts(s.classes, load_ontology(a.ontology))
     ext = make_extractor(a.backbone, a.weights, **({'variant': a.variant} if a.backbone != 'clip' else {}))
@@ -56,7 +56,7 @@ def cmd_openscene(a):
 
 def cmd_fuse_labels(a):
     from PIL import Image
-    from car_semantic_map.openscene_fusion import fuse_labels
+    from car_semantic_map.feature_fusion import fuse_labels
     s = load_scene(a.scene, a.max_views)
     maps = {}
     for v in s.views:
@@ -143,21 +143,21 @@ def cmd_compare(a):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ["check", "openscene", "fuse-labels", "compare"]:
+    for name in ["check", "fuse", "fuse-labels", "compare"]:
         q = sub.add_parser(name)
         q.add_argument("scene")
         q.add_argument("--max_views", type=int, default=None)
         q.add_argument("--ontology", default=str(ONTOLOGY))
-        if name == "openscene":
-            q.add_argument("--name", default=None, help="default: openscene_<backbone>")
+        if name == "fuse":
+            q.add_argument("--name", default=None, help="default: fused_<backbone>")
         if name == "fuse-labels":
             q.add_argument("--labels", required=True)
             q.add_argument("--name", required=True)
-        if name in ("openscene", "compare"):
+        if name in ("fuse", "compare"):
             q.add_argument("--backbone", default="clip", help="clip | pe-b | pe-l | pe-s | pe-t")
             q.add_argument("--variant", default="plain", help="PE only: plain | last_v | last_v_only")
             q.add_argument("--weights", default=None, help="open_clip tag or .pt (default per backbone)")
     a = p.parse_args()
-    if a.cmd == 'openscene' and a.name is None:
-        a.name = 'openscene_' + a.backbone.replace('-', '')
-    {"check": cmd_check, "openscene": cmd_openscene, "fuse-labels": cmd_fuse_labels, "compare": cmd_compare}[a.cmd](a)
+    if a.cmd == 'fuse' and a.name is None:
+        a.name = 'fused_' + a.backbone.replace('-', '')
+    {"check": cmd_check, "fuse": cmd_fuse, "fuse-labels": cmd_fuse_labels, "compare": cmd_compare}[a.cmd](a)
