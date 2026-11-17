@@ -107,6 +107,8 @@ def main():
         ids = tok([p], context_length=ctx)[0]                  # same tokenization SAM3 used
         words = []
         for t_i in range(len(valid)):
+            if t_i >= len(ids):                                # SAM3 appends one slot after the 32 text tokens
+                words.append(f"extra{t_i}"); continue
             try:
                 words.append(tok.decode([int(ids[t_i])]).strip() or f"t{t_i}")
             except Exception:
