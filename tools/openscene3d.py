@@ -187,7 +187,17 @@ def main():
             np.savetxt(fh, np.c_[pts, colors], fmt="%.3f %.3f %.3f %d %d %d")
     write_ply(out / "pred.ply", xyz, rgb)
 
-    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not installed: skipping bev.png / query images (pip install matplotlib)")
+        for q in a.query:                                   # still write the query heatmaps as ply
+            s = (f.float() @ text_features([[q]])[0]).cpu().numpy()
+            slug = re.sub(r"[^a-z0-9]+", "_", q.lower())[:40]
+            g = ((s - s.min()) / (np.ptp(s) + 1e-8) * 255).astype(np.uint8)
+            write_ply(out / f"query_{slug}.ply", xyz, np.c_[g, np.zeros_like(g), 255 - g])
+        print("saved", out)
+        return
     panels = [("prediction", rgb / 255.0)]
     if gt is not None and id2name:
         gc = np.stack([cols.get(id2name.get(int(c), ""), np.array([200, 200, 200])) for c in gt]) / 255.0
