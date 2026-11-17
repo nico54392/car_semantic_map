@@ -132,7 +132,8 @@ def main():
     feats = torch.ones(len(locs), 3)
     t0 = time.time()
     with torch.no_grad():
-        f = model(SparseTensor(feats.cuda(), coords.cuda())).F
+        f = model(SparseTensor(feats.cuda(), coords.cuda()))
+        f = f.F if hasattr(f, "F") else f              # their MinkUNet already returns a dense tensor
         f = f[torch.from_numpy(inds_rec).long().cuda()]
         f = f / (f.norm(dim=-1, keepdim=True) + 1e-8)
     torch.cuda.synchronize()
