@@ -180,6 +180,15 @@ class ClipLikeRunner:
 
 
 # ---------------------------------------------------------------- run / score
+def auroc(score, pos):
+    """chance a random positive pixel outscores a random negative one (ties ignored)"""
+    n1 = int(pos.sum()); n0 = pos.size - n1
+    if n1 == 0 or n0 == 0:
+        return None
+    r = np.argsort(np.argsort(score.ravel())) + 1.0
+    return float((r[pos.ravel()].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
+
+
 def run(a):
     runner = Sam3Runner(a) if a.model == "sam3" else ClipLikeRunner(a)
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -194,7 +203,12 @@ def run(a):
                 up = F.interpolate(s[None].float(), (H, W), mode="bilinear", align_corners=False)[0]
                 pred = up.argmax(0).numpy() + 1
                 st = acc.setdefault(m, dict(inter=np.zeros(K + 1), union=np.zeros(K + 1), gtpx=np.zeros(K + 1),
-                                            correct=0, labelled=0))
+                                            correct=0, labelled=0, aur={}))
+                upn = up.numpy()
+                for c in np.unique(gt[lab]):                   # per-class ranking, classes NOT competing
+                    v = auroc(upn[c - 1][lab], gt[lab] == c)
+                    if v is not None:
+                        st["aur"].setdefault(names[c - 1], []).append(v)
                 for c in np.unique(np.concatenate([gt[lab], pred[lab]])):
                     g_, p_ = (gt == c) & lab, (pred == c) & lab
                     st["inter"][c] += (g_ & p_).sum(); st["union"][c] += (g_ | p_).sum(); st["gtpx"][c] += g_.sum()
@@ -206,15 +220,17 @@ def run(a):
         for m, st in acc.items():
             present = [c for c in range(1, K + 1) if st["gtpx"][c] > 0]
             iou = {names[c - 1]: float(st["inter"][c] / max(st["union"][c], 1)) for c in present}
+            aur = {k: float(np.mean(v)) for k, v in st["aur"].items()}
             res[m] = dict(acc=st["correct"] / max(st["labelled"], 1), miou=float(np.mean(list(iou.values()))),
-                          iou=iou, n_images=len(items), n_classes_competing=K)
+                          iou=iou, n_images=len(items), n_classes_competing=K,
+                          auroc=float(np.mean(list(aur.values()))) if aur else None, auroc_per_class=aur)
         if a.model == "sam3":
             res["_check_prompt_independence_max_diff"] = runner.drift
         json.dump(res, open(out / f"{ds}_{a.model}.json", "w"), indent=2)
         print(f"\n{ds} / {a.model}: {len(items)} images, {K} classes competing")
         for m, r in res.items():
             if not m.startswith("_"):
-                print(f"  {m:15s} acc {r['acc']:.3f}  mIoU {r['miou']:.3f}")
+                print(f"  {m:15s} acc {r['acc']:.3f}  mIoU {r['miou']:.3f}  per-class AUROC {r['auroc']:.3f}")
         if a.model == "sam3":
             print(f"  check: layer-0 inputs identical across prompts (max diff {runner.drift:.1e})")
         draw(examples, names, out / f"{ds}_{a.model}_examples.png")
@@ -250,9 +266,10 @@ def summary(a):
         sub = sorted([r for r in rows if r[0] == ds], key=lambda r: -r[2]["miou"])
         n = sub[0][2]
         print(f"\n{ds}: {n['n_images']} images, {n['n_classes_competing']} classes competing")
-        print(f"  {'method':15s}  acc    mIoU")
+        print(f"  {'method':15s}  acc    mIoU   AUROC   (AUROC = per-class ranking, classes not competing)")
         for _, m, r in sub:
-            print(f"  {m:15s}  {r['acc']:.3f}  {r['miou']:.3f}")
+            au = r.get("auroc")
+            print(f"  {m:15s}  {r['acc']:.3f}  {r['miou']:.3f}  {au:.3f}" if au is not None else f"  {m:15s}  {r['acc']:.3f}  {r['miou']:.3f}    -")
         best = sub[0][2]["iou"]
         print("  per class, best method: " + ", ".join(f"{k} {v:.2f}" for k, v in
                                                                      sorted(best.items(), key=lambda x: -x[1])[:15]))
