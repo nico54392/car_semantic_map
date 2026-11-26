@@ -88,33 +88,44 @@ def heading(a):
 
 
 def turnrate(a):
-    """drive a gentle left curve, compare actual yaw rate with the command -> Turn Slip Factor"""
+    """drive gentle curves + a spin, track yaw continuously (unwrapped), compare with the command"""
     rclpy, node = ros_node("test_path_turnrate")
     from geometry_msgs.msg import Twist
+    from nav_msgs.msg import Odometry
+    from rclpy.qos import qos_profile_sensor_data
     pub = node.create_publisher(Twist, a.cmd_vel, 10)
+    buf = []
+    node.create_subscription(Odometry, a.pose_topic,
+                             lambda m: buf.append((time.time(), yaw_of(m.pose.pose.orientation))), qos_profile_sensor_data)
     res = []
     for v, w in [(0.3, 0.3), (0.3, 0.6), (0.0, 0.6)]:
-        p0 = get_poses(rclpy, node, a.pose_topic)[-1]
+        buf.clear()
         tw = Twist(); tw.linear.x = v; tw.angular.z = w
         t0 = time.time()
         while time.time() - t0 < 3.0:
-            pub.publish(tw); rclpy.spin_once(node, timeout_sec=0.05)
-        p1 = get_poses(rclpy, node, a.pose_topic)[-1]
-        pub.publish(Twist()); time.sleep(0.8)
-        rate = wrap(p1[4] - p0[4]) / (p1[0] - p0[0])
+            pub.publish(tw); rclpy.spin_once(node, timeout_sec=0.02)
+        pub.publish(Twist())
+        samples = [b for b in buf if b[0] - t0 > 0.8]                 # skip the spin-up
+        if len(samples) < 5:
+            sys.exit("too few pose messages during the test: is /odom_unity flowing?")
+        total = sum(wrap(b[1] - a_[1]) for a_, b in zip(samples, samples[1:]))
+        rate = total / (samples[-1][0] - samples[0][0])
         res.append((v, w, rate))
         print(f"v={v:.1f} w={w:.1f} rad/s -> actual {rate:.2f} rad/s  (ratio {rate / w:.2f})")
+        t1 = time.time()
+        while time.time() - t1 < 1.0:
+            rclpy.spin_once(node, timeout_sec=0.05)
     drive = [r / w for v, w, r in res if v > 0]
     k = sum(drive) / len(drive)
-    if k < 0.8:
-        print(f"turns only {k:.0%} of what's asked while driving -> set CmdVelDriver Turn Slip Factor to ~{1 / max(k, 0.1):.1f} "
-              f"(x the current value) and run this again")
-    elif k > 1.25:
-        print(f"over-rotates ({k:.0%}) -> lower Turn Slip Factor to ~{1 / k:.1f} x the current value")
-    else:
-        print("turn response OK")
     if res[0][2] * res[0][1] < 0:
         print("WARNING: it turned the WRONG way (right for positive w). Swap left/right wheels in CmdVelDriver")
+    elif k < 0.8:
+        print(f"turns only {k:.0%} of what's asked while driving -> multiply Turn Slip Factor by ~{1 / max(k, 0.1):.1f} (open loop), "
+              f"or let closedLoop correct it")
+    elif k > 1.25:
+        print(f"over-rotates ({k:.0%}) -> multiply Turn Slip Factor by ~{1 / k:.1f}")
+    else:
+        print("turn response OK")
     rclpy.shutdown()
 
 
