@@ -76,6 +76,10 @@ def main():
     ap.add_argument("--min_trav", type=float, default=0.3)
     ap.add_argument("--unknown", type=float, default=0.5, help="traversability for void / unknown classes")
     ap.add_argument("--ontology", default=str(ROOT / "config" / "ontology.json"))
+    ap.add_argument("--trav", nargs="*", default=[], metavar="CLASS=VALUE",
+                    help="override traversability for a test, e.g. --trav dirt=0.1 grass=0.9")
+    ap.add_argument("--max_slope", type=float, default=None, metavar="DEG",
+                    help="slope cost: cells get harder as they approach this slope, steeper = wall. Off by default")
     a = ap.parse_args()
 
     sc = load_scene(a.scene, max_views=1)
@@ -87,6 +91,14 @@ def main():
         if t is None and cid != 0 and name not in onto:
             print(f"  class '{name}' not in the ontology -> traversability {a.unknown}")
         tv[cid] = a.unknown if t is None else float(t)
+    for kv in a.trav:
+        k, v = kv.split("=")
+        ids = [c for c, n in sc.classes.items() if n == k.strip()]
+        if not ids:
+            sys.exit(f"--trav: '{k}' is not a class in this scene")
+        for c in ids:
+            tv[c] = float(v)
+        print(f"  override: {k} -> {float(v)}")
     present = {sc.classes.get(int(c), f"id{c}"): int(n) for c, n in zip(*np.unique(L, return_counts=True))}
     print(f"{len(P)} map points, labels: {present}")
     print("traversability:", {sc.classes[c]: v for c, v in tv.items() if sc.classes[c] in present})
@@ -96,6 +108,13 @@ def main():
     tg = grid(P, trav_pt, a.cell, lo, shape)
     zg = grid(P, P[:, 2].astype(float), a.cell, lo, shape)
     t = np.where(np.isnan(tg), a.unknown, tg)
+    if a.max_slope:                                   # slope from the height grid, scales traversability down
+        zf = np.where(np.isnan(zg), np.nanmean(zg), zg)
+        gx, gy = np.gradient(zf, a.cell)
+        slope = np.degrees(np.arctan(np.hypot(gx, gy)))
+        factor = np.clip(1 - slope / a.max_slope, 0, 1)
+        t = np.where(slope >= a.max_slope, 0.0, t * factor)
+        print(f"slope: median {np.median(slope):.1f} deg, {(slope >= a.max_slope).mean():.1%} of cells steeper than {a.max_slope} deg (walls)")
     print(f"cost map {shape[0]}x{shape[1]} cells of {a.cell} m, x {lo[0]:.1f}..{lo[0] + shape[0] * a.cell:.1f}, "
           f"y {lo[1]:.1f}..{lo[1] + shape[1] * a.cell:.1f}, {(t < 0.05).sum()} wall cells")
 
