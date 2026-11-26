@@ -24,7 +24,7 @@ Parameters
   rate           control loop Hz (default 20)
 
 Publishes the path on /follow_path/path (nav_msgs/Path) so it shows in RViz.
-Stops (zero Twist) on arrival, on Ctrl-C, and if the pose goes stale (>0.5 s).
+Stops (zero Twist) on arrival, on Ctrl-C, and if the pose goes stale (> pose_timeout, default 1.0 s).
 """
 import json, math, sys, time
 from pathlib import Path
@@ -62,7 +62,9 @@ class Follower(Node):
                                f'goal {d["goal_ros"][:2]}')
 
         msg_type = {"odom": Odometry, "pose": PoseStamped, "pose_cov": PoseWithCovarianceStamped}[self.pose_type]
-        self.create_subscription(msg_type, pose_topic, self.on_pose, 10)
+        from rclpy.qos import qos_profile_sensor_data     # best effort: works with reliable and best-effort publishers
+        self.create_subscription(msg_type, pose_topic, self.on_pose, qos_profile_sensor_data)
+        self.pose_timeout = p("pose_timeout", 1.0)
         self.cmd = self.create_publisher(Twist, cmd_topic, 10)
         self.path_pub = self.create_publisher(PathMsg, "/follow_path/path", 1)
         self.path_msg = PathMsg()
@@ -91,7 +93,7 @@ class Follower(Node):
         if self.done:
             return
         tw = Twist()
-        if self.pose is None or time.time() - self.t_pose > 0.5:
+        if self.pose is None or time.time() - self.t_pose > self.pose_timeout:
             self.cmd.publish(tw)                                  # no / stale pose: stand still
             return
         v, w, self.done = self.pp.step(*self.pose)

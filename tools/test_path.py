@@ -45,7 +45,8 @@ def get_poses(rclpy, node, topic, seconds=0.0, n=1):
     def cb(m):
         p = m.pose.pose
         got.append((time.time(), p.position.x, p.position.y, p.position.z, yaw_of(p.orientation)))
-    sub = node.create_subscription(Odometry, topic, cb, 10)
+    from rclpy.qos import qos_profile_sensor_data         # best effort: receives from reliable AND best-effort publishers
+    sub = node.create_subscription(Odometry, topic, cb, qos_profile_sensor_data)
     t0 = time.time()
     while (len(got) < n or time.time() - t0 < seconds) and time.time() - t0 < seconds + 5:
         rclpy.spin_once(node, timeout_sec=0.1)
