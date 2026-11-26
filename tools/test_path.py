@@ -4,6 +4,7 @@ Hand-made test paths for the follower, no map needed. Run on the ROS machine (no
 
   source /opt/ros/humble/setup.bash
   python3 tools/test_path.py heading                 # drives forward 3 s, checks the reported yaw
+  python3 tools/test_path.py turnrate                # 3 short curves: does it turn as much as asked?
   python3 tools/test_path.py make --shape s          # path from the robot's current pose
   python3 tools/ros2_follow_path.py --ros-args -p path_file:=$HOME/nico_ws/scenes/test/s/path.json
 
@@ -86,6 +87,37 @@ def heading(a):
     rclpy.shutdown()
 
 
+def turnrate(a):
+    """drive a gentle left curve, compare actual yaw rate with the command -> Turn Slip Factor"""
+    rclpy, node = ros_node("test_path_turnrate")
+    from geometry_msgs.msg import Twist
+    pub = node.create_publisher(Twist, a.cmd_vel, 10)
+    res = []
+    for v, w in [(0.3, 0.3), (0.3, 0.6), (0.0, 0.6)]:
+        p0 = get_poses(rclpy, node, a.pose_topic)[-1]
+        tw = Twist(); tw.linear.x = v; tw.angular.z = w
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            pub.publish(tw); rclpy.spin_once(node, timeout_sec=0.05)
+        p1 = get_poses(rclpy, node, a.pose_topic)[-1]
+        pub.publish(Twist()); time.sleep(0.8)
+        rate = wrap(p1[4] - p0[4]) / (p1[0] - p0[0])
+        res.append((v, w, rate))
+        print(f"v={v:.1f} w={w:.1f} rad/s -> actual {rate:.2f} rad/s  (ratio {rate / w:.2f})")
+    drive = [r / w for v, w, r in res if v > 0]
+    k = sum(drive) / len(drive)
+    if k < 0.8:
+        print(f"turns only {k:.0%} of what's asked while driving -> set CmdVelDriver Turn Slip Factor to ~{1 / max(k, 0.1):.1f} "
+              f"(x the current value) and run this again")
+    elif k > 1.25:
+        print(f"over-rotates ({k:.0%}) -> lower Turn Slip Factor to ~{1 / k:.1f} x the current value")
+    else:
+        print("turn response OK")
+    if res[0][2] * res[0][1] < 0:
+        print("WARNING: it turned the WRONG way (right for positive w). Swap left/right wheels in CmdVelDriver")
+    rclpy.shutdown()
+
+
 def shape_points(kind, size, amp, step=0.25):
     pts = []
     if kind == "line":
@@ -137,7 +169,7 @@ def make(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("heading", "make"):
+    for name in ("heading", "make", "turnrate"):
         p = sub.add_parser(name)
         p.add_argument("--pose_topic", default="/odom_unity")
         p.add_argument("--cmd_vel", default="/cmd_vel")
@@ -148,7 +180,7 @@ def main():
             p.add_argument("--heading_offset", type=float, default=0.0)
             p.add_argument("--out", default="~/nico_ws/scenes/test")
     a = ap.parse_args()
-    heading(a) if a.cmd == "heading" else make(a)
+    {"heading": heading, "make": make, "turnrate": turnrate}[a.cmd](a)
 
 
 if __name__ == "__main__":

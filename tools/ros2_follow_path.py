@@ -74,6 +74,8 @@ class Follower(Node):
             ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = float(x), float(y), float(z)
             self.path_msg.poses.append(ps)
         self.pose, self.t_pose, self.done = None, 0.0, False
+        self.log, self.t0 = [], None                               # (t, x, y, yaw, v_cmd, w_cmd) -> run_<time>.csv
+        self.log_path = Path(path_file).with_name(time.strftime("run_%Y%m%d_%H%M%S.csv"))
         self.create_timer(1.0 / p("rate", 20.0), self.tick)
         self.create_timer(1.0, lambda: self.path_pub.publish(self.path_msg))
         self.get_logger().info(f"waiting for {pose_topic} ({self.pose_type}) ...")
@@ -97,6 +99,9 @@ class Follower(Node):
             self.cmd.publish(tw)                                  # no / stale pose: stand still
             return
         v, w, self.done = self.pp.step(*self.pose)
+        if self.t0 is None:
+            self.t0 = time.time()
+        self.log.append((time.time() - self.t0, *self.pose, v, w))
         tw.linear.x, tw.angular.z = float(v), float(w)
         self.cmd.publish(tw)
         if self.done:
@@ -104,13 +109,21 @@ class Follower(Node):
 
     def stop(self):
         self.cmd.publish(Twist())
+        if self.log and not getattr(self, "_saved", False):
+            self._saved = True
+            with open(self.log_path, "w") as f:
+                f.write("t,x,y,yaw,v_cmd,w_cmd\n")
+                for r in self.log:
+                    f.write(",".join(f"{v:.4f}" for v in r) + "\n")
+            print(f"driven route saved: {self.log_path}  (plot: python tools/plot_run.py {self.log_path})")
 
 
 def main():
     rclpy.init()
     node = Follower()
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and not node.done:            # exits by itself on "goal reached"
+            rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     finally:
