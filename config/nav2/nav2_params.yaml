@@ -63,7 +63,10 @@ controller_server:
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.0
       use_regulated_linear_velocity_scaling: true
-      use_cost_regulated_linear_velocity_scaling: false   # true = slow down on costly terrain (try later)
+      use_cost_regulated_linear_velocity_scaling: true    # slow down on costly terrain (mud ~0.6x, gravel ~0.8x, grass ~full)
+      cost_scaling_dist: 0.6
+      cost_scaling_gain: 1.0
+      inflation_cost_scaling_factor: 5.0                  # must match the costmaps' inflation cost_scaling_factor
       regulated_linear_scaling_min_radius: 0.5
       regulated_linear_scaling_min_speed: 0.25
       use_rotate_to_heading: false    # on = stops and spins at the grid path corners
