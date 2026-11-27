@@ -18,7 +18,7 @@ and <out>/surfaces.json with the class order and each surface's real-world tile 
 json if present, else --tile metres). Then in Unity: CAR > Course > Create Terrain Layers (unity/Editor/CourseTools.cs).
 Needs: pillow, numpy.
 """
-import argparse, json, re, shutil
+import argparse, json, re
 from pathlib import Path
 
 import numpy as np
