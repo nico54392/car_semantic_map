@@ -49,12 +49,27 @@ The pieces, each replaceable:
    ros2 param set /semantic_mapper threshold 0.6
    ```
    The yellow-to-dark colouring is the score; the red boxes are the points above the threshold.
-5. Save the map, then drive to it:
+5. Save the map, then drive to it. Nav2 needs a map built from the live map first:
    ```bash
    ros2 service call /semantic_map/save std_srvs/srv/Trigger
-   python tools/prompt_drive.py ~/nico_ws/scenes/live_<time> --map ai
+   L=$(ls -td ~/nico_ws/scenes/live_* | head -1)
+   python tools/unity_grid.py $L --source ai --res 0.2
+   python tools/nav2_map.py $L/grid/ai_grid0.2.npz
+   # other terminals, no conda: python3 tools/unity_nav2_bridge.py
+   #                            ros2 launch config/nav2/nav2_unity.launch.py map:=$L/grid/nav2/map.yaml controller:=mppi
+   python tools/prompt_drive.py $L --map ai
    ```
-   The save message prints the exact folder.
+
+### Gotchas from the first run (city, 2026-11-27)
+- Turn off the robot's old `LiDAR` and `ROSCameras` objects. They publish every frame, fill the ROS-TCP queue
+  ("Queue full! Messages are getting dropped!" in the Unity Console) and `/odom_unity` gets dropped.
+  `ros2 topic list` still shows the topic: check with `ros2 topic hz`.
+- Anything that loads PE-B with ROS sourced (mapper, `prompt_drive`, `unity_grid --source ai`) needs, after
+  `conda activate nico_clip && source /opt/ros/humble/setup.bash`:
+  `export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH` and `export HF_HUB_OFFLINE=1`
+  (otherwise `OPENSSL_3.3.0 not found`).
+- Range: with `max_depth` 10 m the city map came out very sparse. Raise `max_depth` (and `maxDistance` on
+  `RGBDPublisher`) and scan with a bigger circle or more laps.
 
 ## Real robot / handheld D435i
 
