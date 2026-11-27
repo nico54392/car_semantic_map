@@ -40,12 +40,13 @@ RAW_NAMES = {
     31: "puddle", 33: "mud", 34: "rubble",
 }
 
-# Image benchmark: 19 train ids, 0 = void (ignored). Same mapping as the
-# official Evaluate_img.ipynb (dirt->void, 29/30->grass, 32->water).
+# Image benchmark: 19 train ids, 0 = void (ignored), same as the official Evaluate_img.ipynb
+# (29/30->grass, 32->water) EXCEPT dirt: the official mapping sends it to void, but a dirt
+# track is exactly what the robot drives on, so it gets its own id (19) here.
 EVAL_CLASSES = ["void", "grass", "tree", "pole", "water", "sky", "vehicle", "object",
                 "asphalt", "building", "log", "person", "fence", "bush", "concrete",
-                "barrier", "puddle", "mud", "rubble"]
-RAW_TO_EVAL = {0: 0, 1: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7, 10: 8, 12: 9,
+                "barrier", "puddle", "mud", "rubble", "dirt"]
+RAW_TO_EVAL = {0: 0, 1: 19, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7, 10: 8, 12: 9,
                15: 10, 17: 11, 18: 12, 19: 13, 23: 14, 27: 15, 29: 1, 30: 1,
                31: 16, 32: 4, 33: 17, 34: 18}
 IGNORE = 0

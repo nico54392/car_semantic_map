@@ -21,7 +21,7 @@ import numpy as np
 import rellis_io as rio
 from backbones import make_backbone
 from metrics import Accumulator, fmt_header, fmt_row
-from ontology import Ontology
+from ontology import Ontology, default_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -130,9 +130,10 @@ class FeatureCache:
 
 
 def build(args):
-    ont = Ontology.load(args.ontology, args.classes.split(",") if args.classes else None)
+    ont = Ontology.load(args.ontology, args.classes.split(",") if args.classes else None,
+                        rellis_only=not args.all_classes)
     bb = make_backbone(args.backbone, oracle_noise=args.oracle_noise, temperature=args.temperature,
-                       clip_model=args.clip_model, clip_pretrained=args.clip_pretrained)
+                       clip_model=args.clip_model, clip_pretrained=args.clip_pretrained, weights=args.weights)
     bb.set_ontology(ont)
     return ont, bb
 
@@ -193,7 +194,7 @@ def cmd_check(args):
             a[0] += (ii[k][li[k] == c] == c).sum(); a[1] += (li[k] == c).sum()
         if n < 3:
             from PIL import Image, ImageDraw
-            pal = palette(Ontology.load(args.ontology))
+            pal = palette(Ontology.load(args.ontology, rellis_only=True))
             im = Image.fromarray(rio.read_image(fr.image) if fr.image else pal[gt_img])
             dr = ImageDraw.Draw(im)
             for x, y, c in zip(u[::3], v[::3], li[::3]):
@@ -540,10 +541,12 @@ def main():
         p.add_argument("--split", help="official .lst file (relative to root ok)")
         p.add_argument("--max-frames", type=int, default=0)
         p.add_argument("--out", default="out_rellis")
-        p.add_argument("--ontology", default=os.path.join(HERE, "ontology_rellis.json"))
+        p.add_argument("--ontology", default=default_path(), help="default: the repo's config/ontology.json")
+        p.add_argument("--all-classes", action="store_true", help="keep ontology classes RELLIS doesn't have (goal objects)")
         p.add_argument("--classes", help="comma list to restrict the ontology")
-        p.add_argument("--backbone", default="clip", choices=["clip", "oracle"])
+        p.add_argument("--backbone", default="pe-b", help="oracle | pe-b | pe-l | pe-s | clip (from clip_features.py) | clip-standalone")
         p.add_argument("--clip-model", default="ViT-B-16"); p.add_argument("--clip-pretrained", default="laion400m_e32")
+        p.add_argument("--weights", help="override the backbone weights (path or open_clip tag)")
         p.add_argument("--temperature", type=float, default=0.01)
         p.add_argument("--oracle-noise", type=float, default=0.0)
         p.add_argument("--n-vis", type=int, default=4)

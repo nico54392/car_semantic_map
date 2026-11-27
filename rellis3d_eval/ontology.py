@@ -6,6 +6,7 @@ ontology.json / Jaime's class JSON (keys 'name'|'class', 'prompt'|'prompts'|'sam
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,7 +38,9 @@ class Ontology:
         return len(self.classes)
 
     @classmethod
-    def load(cls, path: str, only: list[str] | None = None) -> "Ontology":
+    def load(cls, path: str, only: list[str] | None = None, rellis_only: bool = False) -> "Ontology":
+        """rellis_only: keep only classes that exist in RELLIS (drops goal objects like bench/car,
+        which would otherwise steal predictions when scoring against RELLIS labels)."""
         d = json.load(open(path))
         items = d["classes"] if isinstance(d, dict) and "classes" in d else d
         if isinstance(items, dict):          # {"grass": {...}, ...}
@@ -51,11 +54,16 @@ class Ontology:
             queries = p if isinstance(p, list) else [p]
             ev = it.get("eval_as", name)
             eval_id = EVAL_CLASSES.index(ev) if ev in EVAL_CLASSES and ev != "void" else None
+            if rellis_only and eval_id is None:
+                continue
+            t = it.get("traversability", it.get("trav"))
+            u = it.get("mu", it.get("friction"))
+            # rigid = its height is an obstacle. Default: classes with traversability 0 (tree, log, rock...)
+            rigid = it.get("rigid", t is not None and float(t) <= 0.0 and name != "sky")
             out.append(OntClass(name, queries, eval_id,
-                                float(it.get("traversability", it.get("trav", 0.5))),
-                                float(it.get("mu", it.get("friction", 0.5))),
-                                tuple(it.get("color", (128, 128, 128))),
-                                bool(it.get("rigid", True))))
+                                0.5 if t is None else float(t),       # sky etc.: never on the ground map
+                                0.0 if u is None else float(u),
+                                tuple(it.get("color", (128, 128, 128))), bool(rigid)))
         if not out:
             raise ValueError(f"no classes loaded from {path}")
         return cls(out)
@@ -68,3 +76,10 @@ class Ontology:
             if c.eval_id is not None:
                 t[c.eval_id], m[c.eval_id] = c.trav, c.mu
         return t, m
+
+
+def default_path() -> str:
+    """the repo's config/ontology.json if rellis3d_eval sits in car_semantic_map, else the bundled copy"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.join(here, "..", "config", "ontology.json")
+    return repo if os.path.exists(repo) else os.path.join(here, "ontology_rellis.json")

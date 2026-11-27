@@ -2,6 +2,19 @@
  "_note": "RELLIS-3D image-benchmark classes. 'prompt' can be a string ('a . b' = aggregation) or a list (addition: several queries, class score = max). 'traversability' (0 = blocked, 1 = free) and 'mu' are PLACEHOLDERS until we get Jaime's class JSON. 'eval_as' maps a prediction class onto a RELLIS eval class name when the names differ. 'rigid': whether the class's height counts as an obstacle (tree, log...) or not (grass, bush, mud: cost comes only from traversability).",
  "classes": [
   {
+   "id": 19,
+   "name": "dirt",
+   "prompt": "trail . path . tracks",
+   "color": [
+    108,
+    64,
+    20
+   ],
+   "traversability": 0.9,
+   "mu": 0.5,
+   "rigid": false
+  },
+  {
    "id": 1,
    "name": "grass",
    "prompt": "grass . lawn",

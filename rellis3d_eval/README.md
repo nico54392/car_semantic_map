@@ -46,6 +46,8 @@ python to_grid.py out/map/rellis_map_00000_1000-1297.npz --plan
 python viz.py out/map/rellis_map_00000_1000-1297.npz --root $R
 ```
 
+Backbones: `pe-b` (default), `pe-l`, `clip` come from `car_semantic_map/clip_features.py`; `oracle` uses the GT image labels. The ontology defaults to the repo's `config/ontology.json` (RELLIS classes only; `--all-classes` keeps the goal objects). `dirt` is its own class (the official benchmark maps it to void). Grids from `to_grid.py` follow `control_grid.py` (`axes="yx"`, `control_grid.load` transposes) plus an extra `step_rigid` layer.
+
 Run each command with `--backbone oracle` as well. The oracle uses the GT image labels as "features", so it gives the ceiling that projection, fusion and the metrics allow. Report CLIP results next to it.
 
 Other options:

@@ -17,7 +17,7 @@ import os
 import numpy as np
 
 import rellis_io as rio
-from ontology import Ontology
+from ontology import Ontology, default_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -133,14 +133,14 @@ def main():
     ap.add_argument("map_npz")
     ap.add_argument("--root", help="RELLIS root, needed for frames.png and photo colours")
     ap.add_argument("--out")
-    ap.add_argument("--ontology", default=os.path.join(HERE, "ontology_rellis.json"))
+    ap.add_argument("--ontology", default=default_path())
     ap.add_argument("--n-points", type=int, default=150000, help="points drawn (subsampled)")
     ap.add_argument("--seen-only", action="store_true", help="only voxels a camera saw")
     a = ap.parse_args()
     out = a.out or os.path.dirname(os.path.abspath(a.map_npz))
     os.makedirs(out, exist_ok=True)
     m = np.load(a.map_npz)
-    ont = Ontology.load(a.ontology)
+    ont = Ontology.load(a.ontology, rellis_only=True)
     pal = palette(ont)
     xyz, gt, seen = m["xyz"], m["gt"], m["seen"] > 0
     probs = m["probs"].astype(np.float32)

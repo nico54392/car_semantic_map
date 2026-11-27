@@ -213,10 +213,42 @@ class ClipDenseBackbone(Backbone):
         return f.cpu().numpy().astype(np.float32)
 
 
+class HarnessBackbone(Backbone):
+    """The repo's own extractors (car_semantic_map/clip_features.py: PE-B, PE-L, CLIP), so RELLIS
+    numbers are directly comparable with the 11-18 benchmark. Prompts per class come from the
+    ontology ('prompts' lists = addition, ' . ' = aggregation); class score = max over its queries."""
+
+    def __init__(self, name="pe-b", weights=None, temperature=0.01):
+        import os, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        from car_semantic_map.clip_features import make_extractor
+        self.name = name
+        self.ex = make_extractor(name, weights)
+        self.T = temperature
+
+    def set_ontology(self, ont):
+        super().set_ontology(ont)
+        Q, owner = self.ex.class_features([c.queries for c in ont.classes])
+        self.Q = Q.numpy().astype(np.float32)
+        self.owner = np.asarray(owner)
+        self.dim = self.Q.shape[1]
+        ce = np.stack([self.Q[self.owner == j].mean(0) for j in range(len(ont))])
+        self.class_emb = ce / np.linalg.norm(ce, axis=1, keepdims=True)
+
+    text_sim = ClipDenseBackbone.text_sim
+    classify = ClipDenseBackbone.classify
+
+    def image_features(self, img, gt=None):
+        f = self.ex.image_features(img)                   # [C, h, w] torch, L2-normalised
+        return f.permute(1, 2, 0).numpy().astype(np.float32)
+
+
 def make_backbone(name: str, **kw) -> Backbone:
     if name == "oracle":
         return OracleBackbone(noise=kw.get("oracle_noise", 0.0))
-    if name == "clip":
+    if name in ("pe-b", "pe-l", "pe-s", "pe-t", "clip"):
+        return HarnessBackbone(name, kw.get("weights"), kw.get("temperature", 0.01))
+    if name == "clip-standalone":
         return ClipDenseBackbone(model=kw.get("clip_model", "ViT-B-16"),
                                  pretrained=kw.get("clip_pretrained", "laion400m_e32"),
                                  temperature=kw.get("temperature", 0.01))

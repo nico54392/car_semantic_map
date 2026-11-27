@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Perception -> control hand-off: voxel map (.npz from `rellis.py buildmap`) -> 2D grid.
+"""Perception -> control hand-off: voxel map (.npz from `rellis.py buildmap`) -> 2D grid in the
+car_semantic_map/control_grid.py format (stored [iy, ix] with axes="yx"; control_grid.load transposes it).
 
 Grid layers (all HxW, row = y, col = x, cell (0,0) at `origin`):
   trav_mean, trav_std   expected traversability under the class probabilities, and its spread
@@ -72,7 +73,7 @@ def build_grid(m, res, trav, mu, rigid, min_pts=2, clearance=1.0):
     gt_tr[np.bincount(flat[v], None, n) == 0] = np.nan
     R = lambda a: a.reshape(H, W)
     nanify = lambda a: np.where(R(seen_c), R(a), np.nan)
-    return dict(origin=lo, res=res, trav_mean=nanify(tm), trav_std=nanify(ts), mu_mean=nanify(mm),
+    return dict(origin=lo, res=res, axes="yx", trav_mean=nanify(tm), trav_std=nanify(ts), mu_mean=nanify(mm),
                 mu_std=nanify(ms), probs=P.reshape(H, W, K).astype(np.float16), height=height,
                 step=np.where(ok, zmax - zmin, np.nan).reshape(H, W), slope=slope,
                 step_rigid=np.where(ok, np.maximum(zr - zmin, 0), np.nan).reshape(H, W),
@@ -124,11 +125,12 @@ def main():
     m = np.load(a.map_npz)
     trav, mu = m["ont_trav"].astype(float), m["ont_mu"].astype(float)
     names = list(m["ont_names"])
-    ont_file = a.ontology or os.path.join(os.path.dirname(os.path.abspath(__file__)), "ontology_rellis.json")
-    lut = {c["name"]: c for c in json.load(open(ont_file))["classes"]}
-    rigid = np.array([bool(lut.get(n, {}).get("rigid", True)) for n in names])
-    colors = np.array([lut.get(n, {}).get("color", (128, 128, 128)) for n in names], np.uint8)
-    if a.ontology:
+    from ontology import Ontology, default_path
+    oc = {c.name: c for c in Ontology.load(a.ontology or default_path()).classes}
+    rigid = np.array([oc[n].rigid if n in oc else True for n in names])          # unknown class: assume rigid
+    colors = np.array([oc[n].color if n in oc else (128, 128, 128) for n in names], np.uint8)
+    lut = {n: {"traversability": c.trav, "mu": c.mu} for n, c in oc.items()}
+    if a.ontology:                                     # re-value an existing map without rebuilding it
         trav = np.array([lut[n]["traversability"] if n in lut else t for n, t in zip(names, trav)])
         mu = np.array([lut[n]["mu"] if n in lut else u for n, u in zip(names, mu)])
     if a.source == "gt":
