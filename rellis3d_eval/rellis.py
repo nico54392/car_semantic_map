@@ -50,14 +50,21 @@ def select_frames(args, need=("image", "image_label")):
         sel = parse_frames(args.frames)
         for s in seqs:
             fs = [index[s][k] for k in sorted(index[s])]
-            fs = [f for f in fs if all(getattr(f, n) for n in need)]   # filter before stepping
             if isinstance(sel, slice):
-                fs = [f for f in fs if (sel.start is None or f.idx >= sel.start)
-                      and (sel.stop is None or f.idx < sel.stop)]
-                fs = fs[::sel.step or 1]
+                # the step counts real frame numbers (start, start+step, ...), so every backbone
+                # gets the same frames; frames missing what this run needs are dropped afterwards
+                a0 = sel.start if sel.start is not None else (fs[0].idx if fs else 0)
+                fs = [f for f in fs if f.idx >= a0 and (sel.stop is None or f.idx < sel.stop)
+                      and (f.idx - a0) % (sel.step or 1) == 0]
             elif sel:
                 fs = [f for f in fs if f.idx in sel]
-            frames += fs
+            ok = [f for f in fs if all(getattr(f, n) for n in need)]
+            if len(ok) < len(fs):
+                miss = [f.idx for f in fs if f not in ok]
+                print(f"note: {len(miss)} of {len(fs)} selected frames in {s} lack {need} and are skipped"
+                      + (f" (e.g. {miss[:3]}); with --backbone oracle pick a start/step that lands on labelled frames"
+                         if "image_label" in need else ""))
+            frames += ok
     frames = [f for f in frames if all(getattr(f, n) for n in need)]
     if args.max_frames:
         frames = frames[: args.max_frames]
