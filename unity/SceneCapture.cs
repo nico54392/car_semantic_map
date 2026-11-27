@@ -10,6 +10,9 @@
 //   4. Non-terrain stuff (rocks, logs, bushes) gets a TerrainClass component.
 //      Everything you want in depth/labels needs a collider.
 //   5. Play. C = capture this view, M = export map, or tick autoCaptureOnStart.
+//   No Terrain (city, mesh-only scene)? Tick "useArea", put areaCenter at street level in the middle of the
+//   part you want, set areaSize (e.g. 80 x 80). Roads/sidewalks/cars/people then need TerrainClass + colliders
+//   (CAR > Course > Tag Selection...).
 //
 // Conventions (also written into scene.json):
 //   world  = ROS FLU (x forward, y left, z up), meters. Unity (x,y,z) -> ROS (z,-x,y)
@@ -65,6 +68,18 @@ public class SceneCapture : MonoBehaviour
     public float cameraHeight = 0.6f;          // roughly where the robot's camera sits
     public Vector2 pitchDownDeg = new Vector2(10f, 35f);
     public float edgeMargin = 5f;
+
+    [Header("Area (scenes WITHOUT a Terrain, e.g. a city)")]
+    [Tooltip("Use this box instead of the Terrain for the map export and the auto-capture positions")]
+    public bool useArea = false;
+    [Tooltip("Centre of the area, at street/ground level")]
+    public Vector3 areaCenter = Vector3.zero;
+    [Tooltip("Width (x) and depth (z) of the area, metres")]
+    public Vector2 areaSize = new Vector2(80f, 80f);
+    [Tooltip("Tallest thing in the area (buildings), metres above the centre")]
+    public float areaMaxHeight = 60f;
+    [Tooltip("Auto-capture: a spot counts as ground if it is at most this far above the centre's height (rejects roofs, car tops)")]
+    public float areaGroundTolerance = 1.0f;
 
     Camera cam;
     string dir;
@@ -218,12 +233,11 @@ public class SceneCapture : MonoBehaviour
     public void ExportMap()
     {
         Init();
-        if (terrain == null) { Debug.LogError("SceneCapture: need a terrain for the map export"); return; }
-        var td = terrain.terrainData;
-        Vector3 o = terrain.transform.position;
-        int nx = Mathf.FloorToInt(td.size.x / mapCellSize), nz = Mathf.FloorToInt(td.size.z / mapCellSize);
+        if (!GetBox(out Vector3 o, out Vector3 bs))
+        { Debug.LogError("SceneCapture: need a Terrain, or tick 'useArea' and set the area (city scenes)"); return; }
+        int nx = Mathf.FloorToInt(bs.x / mapCellSize), nz = Mathf.FloorToInt(bs.z / mapCellSize);
         int n = nx * nz;
-        float top = o.y + td.size.y + 50f;
+        float top = o.y + bs.y + 50f;
 
         // straight-down rays: you get the top surface (tree canopy, not the ground under it)
         var cmds = new NativeArray<RaycastCommand>(n, Allocator.TempJob);
@@ -233,7 +247,7 @@ public class SceneCapture : MonoBehaviour
             for (int ix = 0; ix < nx; ix++)
             {
                 var from = new Vector3(o.x + (ix + 0.5f) * mapCellSize, top, o.z + (iz + 0.5f) * mapCellSize);
-                cmds[iz * nx + ix] = new RaycastCommand(from, Vector3.down, qp, td.size.y + 100f);
+                cmds[iz * nx + ix] = new RaycastCommand(from, Vector3.down, qp, bs.y + 100f);
             }
         RaycastCommand.ScheduleBatch(cmds, hits, 256, 1).Complete();
 
@@ -264,23 +278,47 @@ public class SceneCapture : MonoBehaviour
     {
         yield return null;
         ExportMap();
-        if (terrain == null) yield break;
-        var td = terrain.terrainData;
-        Vector3 o = terrain.transform.position;
+        if (!GetBox(out Vector3 o, out Vector3 bs)) yield break;
+        int skipped = 0;
         for (int k = 0; k < autoViews; k++)
         {
-            float x = o.x + UnityEngine.Random.Range(edgeMargin, td.size.x - edgeMargin);
-            float z = o.z + UnityEngine.Random.Range(edgeMargin, td.size.z - edgeMargin);
-            float y = terrain.SampleHeight(new Vector3(x, 0, z)) + o.y + cameraHeight;
+            float x = 0f, z = 0f, ground = 0f;
+            bool ok = false;
+            for (int tries = 0; tries < 30 && !ok; tries++)
+            {
+                x = o.x + UnityEngine.Random.Range(edgeMargin, bs.x - edgeMargin);
+                z = o.z + UnityEngine.Random.Range(edgeMargin, bs.z - edgeMargin);
+                if (!useArea && terrain != null) { ground = terrain.SampleHeight(new Vector3(x, 0, z)) + o.y; ok = true; }
+                else if (Physics.Raycast(new Vector3(x, o.y + bs.y + 50f, z), Vector3.down, out RaycastHit gh,
+                                         bs.y + 100f, raycastMask, QueryTriggerInteraction.Ignore)
+                         && gh.point.y <= areaCenter.y + areaGroundTolerance && gh.normal.y > 0.7f)
+                { ground = gh.point.y; ok = true; }          // street level, not a roof or a car top
+            }
+            if (!ok) { skipped++; continue; }
+            float y = ground + cameraHeight;
             transform.SetPositionAndRotation(new Vector3(x, y, z),
                 Quaternion.Euler(UnityEngine.Random.Range(pitchDownDeg.x, pitchDownDeg.y), UnityEngine.Random.Range(0f, 360f), 0f));
             yield return null;
             CaptureView();
         }
-        Debug.Log("SceneCapture: auto capture done");
+        Debug.Log($"SceneCapture: auto capture done" + (skipped > 0 ? $" ({skipped} views skipped: no ground spot found, check areaCenter height)" : ""));
     }
 
     // ------------------------------------------------------------------ helpers
+
+    // the box the map export and auto capture work in: the Terrain, or the manual area
+    bool GetBox(out Vector3 o, out Vector3 size)
+    {
+        if (useArea)
+        {
+            size = new Vector3(areaSize.x, areaMaxHeight + 10f, areaSize.y);
+            o = new Vector3(areaCenter.x - areaSize.x / 2f, areaCenter.y - 10f, areaCenter.z - areaSize.y / 2f);
+            return true;
+        }
+        if (terrain != null) { o = terrain.transform.position; size = terrain.terrainData.size; return true; }
+        o = size = Vector3.zero;
+        return false;
+    }
 
     int ClassAt(RaycastHit hit)
     {

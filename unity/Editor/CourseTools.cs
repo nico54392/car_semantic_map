@@ -118,16 +118,20 @@ public static class CourseTools
         var sc = FindCapture(); if (!sc) return;
         var terrain = sc.terrain ? sc.terrain : PickTerrain();
         Undo.RecordObject(sc, "Sync SceneCapture classes");
-        sc.terrain = terrain;
-        sc.terrainLayerToClass = new List<int>();
-        foreach (var l in terrain.terrainData.terrainLayers)
-            sc.terrainLayerToClass.Add(l ? EnsureClass(sc, l.name) : 0);
         var tagged = Object.FindObjectsByType<TerrainClass>(FindObjectsSortMode.None);
+        string layers = "no Terrain (area mode: classes come from tagged objects only)";
+        if (terrain)
+        {
+            sc.terrain = terrain;
+            sc.terrainLayerToClass = new List<int>();
+            foreach (var l in terrain.terrainData.terrainLayers)
+                sc.terrainLayerToClass.Add(l ? EnsureClass(sc, l.name) : 0);
+            layers = $"terrainLayerToClass = [{string.Join(", ", sc.terrainLayerToClass)}] for layers " +
+                     $"[{string.Join(", ", terrain.terrainData.terrainLayers.Select(l => l ? l.name : "-"))}]";
+        }
         EditorUtility.SetDirty(sc);
-        Debug.Log($"CourseTools: terrainLayerToClass = [{string.Join(", ", sc.terrainLayerToClass)}] for layers " +
-                  $"[{string.Join(", ", terrain.terrainData.terrainLayers.Select(l => l ? l.name : "-"))}]; " +
-                  $"classes: {string.Join(", ", sc.classes.Select(c => $"{c.id}={c.name}"))}; {tagged.Length} tagged objects. " +
-                  "Class names must match config/ontology.json.");
+        Debug.Log($"CourseTools: {layers}; classes: {string.Join(", ", sc.classes.Select(c => $"{c.id}={c.name}"))}; " +
+                  $"{tagged.Length} tagged objects. Class names must match config/ontology.json.");
     }
 
     // ---------------------------------------------------------------- tag objects
