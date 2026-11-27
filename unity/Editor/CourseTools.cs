@@ -8,6 +8,7 @@
 // 4. Paint the course (Paint Texture).
 // 5. Select rocks / logs / bench / trees, CAR > Course > 3. Tag Selection...   -> TerrainClass + colliders
 // 6. CAR > Course > 4. Sync SceneCapture Classes    classes list + terrainLayerToClass from the layer names and tags
+// City / mesh scenes: CAR > Course > Add Colliders to Selection on the city root, so depth and the wheels see it.
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -132,6 +133,24 @@ public static class CourseTools
         EditorUtility.SetDirty(sc);
         Debug.Log($"CourseTools: {layers}; classes: {string.Join(", ", sc.classes.Select(c => $"{c.id}={c.name}"))}; " +
                   $"{tagged.Length} tagged objects. Class names must match config/ontology.json.");
+    }
+
+    // ---------------------------------------------------------------- colliders only
+
+    [MenuItem("CAR/Course/Add Colliders to Selection (and children)")]
+    static void AddColliders()
+    {
+        int added = 0, had = 0;
+        foreach (var go in Selection.gameObjects)
+            foreach (var mf in go.GetComponentsInChildren<MeshFilter>(true))
+            {
+                if (mf.sharedMesh == null) continue;
+                if (mf.GetComponent<Collider>() != null) { had++; continue; }
+                Undo.AddComponent<MeshCollider>(mf.gameObject).sharedMesh = mf.sharedMesh;
+                added++;
+            }
+        Debug.Log($"CourseTools: added {added} MeshColliders ({had} meshes already had a collider). " +
+                  "Depth (RGBDPublisher / SceneCapture) and the robot's wheels only see things with colliders.");
     }
 
     // ---------------------------------------------------------------- tag objects
