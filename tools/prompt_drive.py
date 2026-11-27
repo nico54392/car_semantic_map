@@ -2,8 +2,9 @@
 """
 Type a prompt, the robot drives there, type the next one.  "go to the puddle" -> ... -> "now the bench"
 
-    python tools/prompt_drive.py <scene> --map gt          # Unity labels (no AI): tests planning + driving
-    python tools/prompt_drive.py <scene> --map ai          # embedded map (feature_map.py build): open vocabulary
+    python tools/prompt_drive.py <scene>                   # auto: class names -> Unity labels, other words -> AI
+    python tools/prompt_drive.py <scene> --map gt          # Unity labels only (no AI): tests planning + driving
+    python tools/prompt_drive.py <scene> --map ai          # embedded map only (feature_map.py build), any words
     python tools/prompt_drive.py <scene> --map gt --sim --start 0 0   # no ROS: simulated unicycle, for testing
 
 Driving: --controller nav2 (default) picks the goal here and hands it to Nav2 (navigate_to_pose): Nav2's planner
@@ -23,7 +24,9 @@ While driving: type "stop" (or a new prompt, which replaces the current goal).
 
 Same frames as goal_from_prompt.py / ros2_follow_path.py: map = ROS FLU from the Unity export, and
 /odom_unity is published in that frame (Nav2Publisher.cs), so no offset by default.
-Each goal writes <scene>/goals/drive_<prompt>/path.json (same format as goal_from_prompt.py) + plan.png.
+Each goal writes <scene>/goals/drive_<prompt>/path.json (same format as goal_from_prompt.py), plan.png and
+view.html: interactive 3D map with the prompt's heatmap (or traversability), the plan and the driven route.
+It opens in the browser at each prompt (--no-open to stop that) and is rewritten with the driven route on arrival.
 """
 import argparse, json, math, queue, re, sys, threading, time
 from pathlib import Path
@@ -89,35 +92,54 @@ def bearing_ok(side, robot_xy, yaw, xy):
 # ---------------------------------------------------------------- planner (no ROS)
 
 class PromptPlanner:
+    """mode: gt   = Unity labels only (class names)
+             ai   = embedded map only (any text, zero-shot)
+             auto = both: a class name in the scene -> labels, anything else -> embeddings
+       cost: which map decides where the robot can drive (default: gt when loaded, else ai)"""
+
     def __init__(self, scene, mode="gt", cell=0.25, ontology=ONTOLOGY, unknown=0.5, thresh=0.5,
-                 synonym=0.85, standoff=1.0, min_trav=0.3, pick="nearest", weights=None):
-        self.scene, self.mode, self.cell = Path(scene), mode, cell
+                 synonym=0.85, standoff=1.0, min_trav=0.3, pick="nearest", weights=None, cost=None):
+        self.scene, self.cell = Path(scene), cell
         self.unknown, self.thresh, self.synonym = unknown, thresh, synonym
         self.standoff, self.min_trav, self.pick = standoff, min_trav, pick
         self.history, self.last_target = [], None        # where each goal started from; last thing asked for
         self.onto = load_ontology(Path(ontology))
-        if mode == "gt":
+        if mode == "auto" and not (self.scene / "embedded_map.npz").exists():
+            print("no embedded_map.npz in the scene (python tools/feature_map.py build <scene> --backbone pe-b): "
+                  "class names only")
+            mode = "gt"
+        self.mode = mode
+        self.has_gt, self.has_ai = mode in ("gt", "auto"), mode in ("ai", "auto")
+        if self.has_gt:
             from car_semantic_map.scene_io import load_scene
             sc = load_scene(scene, max_views=1)
-            self.P, self.L, self.classes = sc.points, sc.point_labels, sc.classes
+            self.Pg, self.L, self.classes = sc.points, sc.point_labels, sc.classes
             tv = {cid: (unknown if cid == 0 or self.onto.get(n, {}).get("traversability") is None
                         else float(self.onto[n]["traversability"])) for cid, n in self.classes.items()}
-            trav = np.array([tv.get(int(c), unknown) for c in self.L], float)
-            present = sorted({self.classes.get(int(c), "?") for c in np.unique(self.L)} - {"void", "?"})
-            self.names = [n for n in present]
-        else:
+            self.trav_gt = np.array([tv.get(int(c), unknown) for c in self.L], float)
+            self.names = sorted({self.classes.get(int(c), "?") for c in np.unique(self.L)} - {"void", "?"})
+        if self.has_ai:
             from feature_map import EmbeddedMap
             self.m = EmbeddedMap(scene, weights, ontology)
-            self.P = self.m.points
+            self.Pa = self.m.points
             names, probs = self.m.classify()
-            trav, _ = self.m.properties(names, probs, "traversability")
-            self.names = names
-        self.trav_pt = trav
-        self.tg, self.lo = grid(self.P, trav, cell)
-        self.zg, _ = grid(self.P, self.P[:, 2].astype(float), cell, (self.lo, self.P[:, :2].max(0)))
+            self.trav_ai, _ = self.m.properties(names, probs, "traversability")
+            if not self.has_gt:
+                self.names = names
+        self.cost = cost or ("gt" if self.has_gt else "ai")
+        if self.cost == "ai" and not self.has_ai or self.cost == "gt" and not self.has_gt:
+            raise SystemExit(f"--cost {self.cost} needs that map loaded (--map {self.cost} or auto)")
+        P, trav = (self.Pg, self.trav_gt) if self.cost == "gt" else (self.Pa, self.trav_ai)
+        self.tg, self.lo = grid(P, trav, cell)
+        self.zg, _ = grid(P, P[:, 2].astype(float), cell, (self.lo, P[:, :2].max(0)))
         self.shape = np.array(self.tg.shape)
-        print(f"map: {len(self.P)} points, {self.tg.shape[0]}x{self.tg.shape[1]} cells of {cell} m, "
+        print(f"map: {self.mode} targets ({'class names -> labels, anything else -> AI' if self.mode == 'auto' else self.mode}), "
+              f"{self.cost} cost map, {self.tg.shape[0]}x{self.tg.shape[1]} cells of {cell} m, "
               f"x {self.lo[0]:.1f}..{self.lo[0] + self.shape[0] * cell:.1f}, y {self.lo[1]:.1f}..{self.lo[1] + self.shape[1] * cell:.1f}")
+
+    def inside(self, pts):
+        hi = self.lo + self.shape * self.cell
+        return np.all((pts[:, :2] >= self.lo) & (pts[:, :2] < hi), axis=1)
 
     def _reach(self, tg, start, cands, tries=25):
         for goal in sorted(cands, key=lambda c: np.hypot(c[0] - start[0], c[1] - start[1]))[:tries]:
@@ -129,26 +151,31 @@ class PromptPlanner:
     def cell_of(self, xy):
         return tuple(np.clip(np.floor((np.asarray(xy, float) - self.lo) / self.cell).astype(int), 0, self.shape - 1))
 
+    def gt_class(self, text):
+        ids = {n: c for c, n in self.classes.items()}
+        for cand in [text] + text.split()[::-1]:          # "big tree" -> "tree", "puddles" -> "puddle"
+            for c in (cand, cand[:-1] if cand.endswith("s") else None, cand[:-2] if cand.endswith("es") else None):
+                if c and c in ids and c != "void":
+                    return c, ids[c]
+        return None, None
+
     def mask_for(self, text):
-        """-> (point mask, is_drivable_target, message)"""
-        if self.mode == "gt":
-            ids = {n: c for c, n in self.classes.items()}
-            name = None
-            for cand in [text] + text.split()[::-1]:      # "big tree" -> "tree", "puddles" -> "puddle"
-                for c in (cand, cand[:-1] if cand.endswith("s") else None, cand[:-2] if cand.endswith("es") else None):
-                    if c and c in ids and c != "void":
-                        name = c; break
-                if name:
-                    break
-            if name is None:
-                return None, False, f'"{text}" is not a class in this scene. Classes: {", ".join(self.names)}'
-            mask = self.L == ids[name]
-            t = self.onto.get(name, {}).get("traversability")
-            return mask, (t is not None and t >= self.min_trav), f"{mask.sum()} points labelled {name}"
+        """-> (points, point mask, is_drivable_target, message). Message starts with [gt] or [ai]."""
+        if self.has_gt:
+            name, cid = self.gt_class(text)
+            if name is not None:
+                mask = self.L == cid
+                t = self.onto.get(name, {}).get("traversability")
+                self._heat = (self.Pg, mask.astype(float), f"{name} (labels)")
+                return self.Pg, mask, (t is not None and t >= self.min_trav), f"[gt] {mask.sum()} points labelled {name}"
+            if not self.has_ai:
+                return None, None, False, f'"{text}" is not a class in this scene. Classes: {", ".join(self.names)}' + \
+                    ("" if self.mode != "gt" else ". For other words: python tools/feature_map.py build <scene>, then --map auto")
         from goal_from_prompt import target_probability
         p, best_other, dropped = target_probability(self.m, text, synonym=self.synonym)
         mask = np.nan_to_num(p) > self.thresh
-        msg = f"{mask.sum()} points with P > {self.thresh} (max {np.nanmax(p):.2f})"
+        self._heat = (self.Pa, np.nan_to_num(p), f"P('{text}' wins) (embeddings)")
+        msg = f"[ai] {mask.sum()} points with P > {self.thresh} (max {np.nanmax(p):.2f})"
         if dropped:
             msg += f"; synonyms not competing: {dropped}"
         if not mask.any():
@@ -156,12 +183,12 @@ class PromptPlanner:
             u, c = np.unique(top, return_counts=True)
             top3 = ", ".join(f"{n} ({k})" for n, k in sorted(zip(map(str, u), map(int, c)), key=lambda t: -t[1])[:3])
             msg += f"; nothing found. Its best points belong to: {top3}. Try other words"
-            return None, False, msg
+            return None, None, False, msg
         t = self.onto.get(text, {}).get("traversability")
         drivable = t is not None and t >= self.min_trav
         if t is None:                         # open vocabulary: drivable if what's under the mask is
-            drivable = np.nanmean(self.trav_pt[mask]) >= self.min_trav
-        return mask, drivable, msg
+            drivable = np.nanmean(self.trav_ai[mask]) >= self.min_trav
+        return self.Pa, mask, drivable, msg
 
     def plan(self, text, start_xy, yaw=None):
         """-> dict(waypoints (N,3) ros, goal, ...) or (None, reason)"""
@@ -186,11 +213,13 @@ class PromptPlanner:
             text = req["target"] or self.last_target       # "the farthest one" -> same thing as last time
             if not text:
                 return None, "what should I look for? e.g. 'the farthest gravel patch'"
-            mask, drivable, msg = self.mask_for(text)
+            pts, mask, drivable, msg = self.mask_for(text)
             if mask is None:
                 return None, msg
             self.last_target = text
-            cl, lab = clusters(self.P, mask, self.cell, self.lo, self.tg.shape)
+            heat = self._heat
+            mask = mask & self.inside(pts)
+            cl, lab = clusters(pts, mask, self.cell, self.lo, self.tg.shape)
             # the blob the robot is standing in / right next to (within the standoff)
             r = int(np.ceil(max(self.standoff, 0.75) / self.cell))
             i0, j0 = start
@@ -215,11 +244,12 @@ class PromptPlanner:
                     where = {"left": "on your left", "right": "on your right", "front": "in front of you", "behind": "behind you"}[req["side"]]
                     why.append(f"{len(cl2)} of {len(cl)} {where}"); cl = cl2
             if req["ref"]:                                # "... near the bench": rank by distance to the bench
-                rmask, _, rmsg = self.mask_for(req["ref"])
+                rpts, rmask, _, rmsg = self.mask_for(req["ref"])
                 if rmask is None:
                     return None, msg + f"; reference '{req['ref']}': {rmsg}"
                 from scipy.spatial import cKDTree
-                tree = cKDTree(self.P[rmask, :2])
+                tree = cKDTree(rpts[rmask, :2])
+                why.append(f"{req['ref']} from {rmsg[:4]}")
                 for c in cl:
                     pts = self.lo + (np.argwhere(lab == c["id"]) + 0.5) * self.cell
                     c["d_ref"] = float(tree.query(pts)[0].min())
@@ -253,6 +283,7 @@ class PromptPlanner:
                     cands = [tuple(c) for c in np.argwhere(ring)]
                 path, cost = self._reach(tg, start, cands)
                 if path:
+                    chosen = obj
                     nth = ["", "2nd ", "3rd ", "4th ", "5th "][req["rank"]] if req["rank"] < 5 else f"#{req['rank'] + 1} "
                     pick = (f"the {nth}closest to the {req['ref']} ({obj['d_ref']:.1f} m from it)" if req["ref"]
                             else f"the {nth}{word}")
@@ -286,11 +317,83 @@ class PromptPlanner:
         json.dump(res, open(out / "path.json", "w"), indent=1)
         self._png(out / "plan.png", xy, label)
         res["dir"] = str(out)
+        self.view = dict(heat=None if coords else heat, ref=req["ref"] if req else None,
+                         blob=None if coords else chosen["centroid"].tolist())
         if label != "back":
             self.history.append(np.asarray(start_xy, float).copy())
         elif len(self.history) > 1:
             self.history.pop()
         return res, msg
+
+    def write_view(self, res, traj=None, open_browser=False):
+        """interactive 3D view for one prompt: heatmap / traversability, plan, driven route -> view.html"""
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            print("  (pip install plotly for the 3D view)"); return None
+        v = getattr(self, "view", {}) or {}
+        P, trav = (self.Pg, self.trav_gt) if self.cost == "gt" else (self.Pa, self.trav_ai)
+        rng = np.random.default_rng(0)
+        idx = rng.choice(len(P), min(len(P), 60000), replace=False)
+        T = []
+        heat = v.get("heat")
+        if heat is not None:
+            hp, hs, hname = heat
+            hs = np.nan_to_num(hs)
+            # background: whole map grey, matching points coloured by score
+            T.append(go.Scatter3d(x=P[idx, 0], y=P[idx, 1], z=P[idx, 2], mode="markers", name="map",
+                                  marker=dict(size=1.5, color="rgb(150,150,150)"), hoverinfo="skip", visible=True))
+            hot = np.where(hs > max(0.02, 0.15 * hs.max()))[0]
+            hot = hot[rng.choice(len(hot), min(len(hot), 40000), replace=False)] if len(hot) else hot
+            T.append(go.Scatter3d(x=hp[hot, 0], y=hp[hot, 1], z=hp[hot, 2] + 0.02, mode="markers", name=hname,
+                                  marker=dict(size=2.2, color=hs[hot], colorscale="Hot", cmin=0, cmax=max(hs.max(), 1e-3),
+                                              colorbar=dict(title="match", x=1.0, len=0.6)),
+                                  hovertemplate="match %{marker.color:.2f}<extra></extra>", visible=True))
+        tr = np.nan_to_num(trav, nan=self.unknown)
+        T.append(go.Scatter3d(x=P[idx, 0], y=P[idx, 1], z=P[idx, 2], mode="markers", name="traversability",
+                              marker=dict(size=1.6, color=tr[idx], colorscale="Viridis", cmin=0, cmax=1,
+                                          colorbar=dict(title="trav", x=1.08, len=0.6)),
+                              hovertemplate="trav %{marker.color:.2f}<extra></extra>", visible=heat is None))
+        wp = np.array(res["waypoints_ros"])
+        T.append(go.Scatter3d(x=wp[:, 0], y=wp[:, 1], z=wp[:, 2] + 0.35, mode="lines", name="plan",
+                              line=dict(color="red", width=7)))
+        if traj is not None and len(traj) > 1:
+            tj = np.asarray(traj)[:, :2]
+            zt = np.array([self.zg[self.cell_of(p)] for p in tj]); zt = np.where(np.isnan(zt), np.nanmean(self.zg), zt)
+            T.append(go.Scatter3d(x=tj[:, 0], y=tj[:, 1], z=zt + 0.5, mode="lines", name="driven",
+                                  line=dict(color="white", width=5, dash="dash")))
+        marks = [("start", wp[0], "lime", "circle"), ("goal", wp[-1], "red", "diamond")]
+        if v.get("blob") is not None:
+            marks.append(("chosen " + res["query"], np.array(v["blob"]), "gold", "cross"))
+        for name, pnt, col, sym in marks:
+            T.append(go.Scatter3d(x=[pnt[0]], y=[pnt[1]], z=[pnt[2] + 0.8], mode="markers+text", name=name,
+                                  text=[name], textposition="top center", textfont=dict(color="white"),
+                                  marker=dict(size=7, color=col, symbol=sym)))
+        n = len(T)
+        has_heat = heat is not None
+        vis_heat = [True] * n if has_heat else None
+        if has_heat:
+            vis_heat[2] = False                           # traversability off
+            vis_trav = [i not in (0, 1) for i in range(n)]
+        buttons = [dict(label="heatmap", method="update", args=[{"visible": vis_heat}]),
+                   dict(label="traversability", method="update", args=[{"visible": vis_trav}])] if has_heat else []
+        title = (f'"{res["prompt"]}"  ->  {res["path_length_m"]:.1f} m, mean trav {res["mean_trav_on_path"]:.2f}'
+                 f'{"  |  driven" if traj is not None else ""}<br><sup>{res["message"][:220]}</sup>')
+        fig = go.Figure(T)
+        fig.update_layout(title=title, scene=dict(aspectmode="data", bgcolor="rgb(20,20,25)",
+                                                  xaxis_title="x [m]", yaxis_title="y [m]", zaxis_title="z [m]"),
+                          updatemenus=[dict(buttons=buttons, x=0.01, y=0.99, xanchor="left")] if buttons else [],
+                          paper_bgcolor="rgb(245,245,245)", margin=dict(l=0, r=0, t=70, b=0),
+                          legend=dict(x=0.01, y=0.85))
+        out = Path(res["dir"]) / "view.html"
+        fig.write_html(out, include_plotlyjs="cdn")
+        if open_browser:
+            import webbrowser
+            try:
+                webbrowser.open_new_tab(out.resolve().as_uri())
+            except Exception:
+                pass
+        return out
 
     def _png(self, path, xy, label, traj=None):
         import matplotlib
@@ -324,7 +427,9 @@ HELP = ('type a place: "go to the puddle", "the farthest gravel patch", "second 
 
 def handle_meta(cmd, planner, pose):
     if cmd in ("list", "help", "?"):
-        print("classes:", ", ".join(planner.names), "\n" + HELP)
+        print("classes:", ", ".join(planner.names) +
+              ("  (+ any other words: zero-shot on the embedded map)" if planner.has_ai and planner.has_gt else
+               "  (+ any other words, zero-shot)" if planner.has_ai else ""), "\n" + HELP)
         return True
     if cmd == "where":
         print("robot at", "unknown" if pose is None else f"x={pose[0]:.2f} y={pose[1]:.2f} yaw={math.degrees(pose[2]):.0f} deg")
@@ -352,6 +457,9 @@ def run_sim(planner, a):
         if res["path_length_m"] < 0.5:
             print("  already there"); continue
         print(f"  path {res['path_length_m']:.1f} m, mean traversability {res['mean_trav_on_path']:.2f} -> {res['dir']}")
+        html = planner.write_view(res, open_browser=a.open)
+        if html:
+            print(f"  3D view: {html}")
         pp = PurePursuit([w[:2] for w in res["waypoints_ros"]], lookahead=a.lookahead, v_max=a.v_max,
                          w_max=a.w_max, goal_tol=a.goal_tol)
         traj, dt, t = [tuple(pose)], 0.05, 0.0
@@ -364,6 +472,7 @@ def run_sim(planner, a):
         traj = np.array(traj)
         print(f"  {'arrived' if done else 'did NOT arrive'} after {t:.0f} s (sim), now at ({pose[0]:.1f}, {pose[1]:.1f})")
         planner._png(Path(res["dir"]) / "plan.png", np.array(res["waypoints_ros"])[:, :2], res["query"], traj[:, :2])
+        planner.write_view(res, traj=traj)               # same file, now with the driven route (refresh the tab)
 
 
 # ---------------------------------------------------------------- ROS node
@@ -457,6 +566,8 @@ def run_ros(planner, a):
 
         def finish(self):
             self.active, self.gh, self.pp = False, None, None
+            if self.log and getattr(self, "res", None) is not None:
+                planner.write_view(self.res, traj=np.array([r[1:3] for r in self.log]))   # add the driven route
             if self.log and self.log_dir:
                 f = self.log_dir / time.strftime("run_%Y%m%d_%H%M%S.csv")
                 with open(f, "w") as fh:
@@ -509,6 +620,10 @@ def run_ros(planner, a):
                 print("  already there\n> " if res else "> ", end="", flush=True); continue
             print(f"  our path {res['path_length_m']:.1f} m, mean traversability {res['mean_trav_on_path']:.2f}: driving "
                   f"(type stop or a new place)\n> ", end="", flush=True)
+            html = planner.write_view(res, open_browser=a.open)
+            if html:
+                print(f"  3D view: {html}\n> ", end="", flush=True)
+            node.res = res
             node.go(res)
     except KeyboardInterrupt:
         pass
@@ -519,7 +634,12 @@ def run_ros(planner, a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scene")
-    ap.add_argument("--map", choices=["gt", "ai"], default="gt", help="gt = Unity labels, ai = embedded_map.npz")
+    ap.add_argument("--map", choices=["auto", "gt", "ai"], default="auto",
+                    help="auto = class names -> Unity labels, any other text -> embedded map (zero-shot); "
+                         "gt = labels only; ai = embedded map only")
+    ap.add_argument("--cost", choices=["gt", "ai"], default=None,
+                    help="which map decides where the robot can drive (default gt when loaded: perfect driving, "
+                         "so you only test whether the AI finds the target)")
     ap.add_argument("--sim", action="store_true", help="no ROS: simulated robot")
     ap.add_argument("--controller", choices=["nav2", "pp"], default="nav2",
                     help="nav2: send the goal to Nav2 (launch it with controller:=mppi); pp: our pure pursuit, no Nav2")
@@ -543,10 +663,12 @@ def main():
     ap.add_argument("--w_max", type=float, default=1.0)
     ap.add_argument("--goal_tol", type=float, default=0.3)
     ap.add_argument("--rate", type=float, default=20.0)
+    ap.add_argument("--no-open", dest="open", action="store_false",
+                    help="don't open each prompt's 3D view (view.html) in the browser")
     ap.add_argument("--pose_timeout", type=float, default=1.0)
     a = ap.parse_args()
     planner = PromptPlanner(a.scene, a.map, a.cell, a.ontology, a.unknown, a.thresh, a.synonym,
-                            a.standoff, a.min_trav, a.pick, a.weights)
+                            a.standoff, a.min_trav, a.pick, a.weights, a.cost)
     (run_sim if a.sim else run_ros)(planner, a)
 
 
