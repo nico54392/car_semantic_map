@@ -44,7 +44,9 @@ class Scan(Node):
 
     def on_odom(self, m):
         y = yaw_of(m.pose.pose.orientation)
-        if self.yaw is not None:
+        if self.yaw is None:
+            self.get_logger().info("odometry OK, driving (laps count from here)")
+        else:
             d = (y - self.yaw + math.pi) % (2 * math.pi) - math.pi
             self.turned += abs(d)
         self.yaw, self.t_odom = y, time.time()
@@ -53,10 +55,10 @@ class Scan(Node):
         if self.done:
             return
         if self.yaw is None:
-            if time.time() - self.t0 > 3:
+            if time.time() - self.t0 > 10:
                 self.get_logger().warn(f"no {self.a.odom_topic} yet: is the robot/odometry running?", throttle_duration_sec=5)
             return
-        stale = time.time() - self.t_odom > 1.0
+        stale = time.time() - self.t_odom > 2.0     # Unity odom can stall ~1-2 s when its queue is busy
         if self.turned >= self.goal or time.time() - self.t0 > self.a.timeout:
             self.stop(f"done: turned {math.degrees(self.turned):.0f} deg in {time.time() - self.t0:.0f} s")
             return
@@ -66,7 +68,8 @@ class Scan(Node):
         self.cmd.publish(tw)
 
     def stop(self, why):
-        self.cmd.publish(Twist())
+        if rclpy.ok():
+            self.cmd.publish(Twist())
         self.done = True
         self.get_logger().info(why + ". Now: ros2 service call /semantic_map/save std_srvs/srv/Trigger")
 
@@ -90,7 +93,10 @@ def main():
     except KeyboardInterrupt:
         n.stop("stopped (Ctrl-C)")
     finally:
-        n.cmd.publish(Twist()); n.destroy_node(); rclpy.shutdown()
+        if rclpy.ok():
+            n.cmd.publish(Twist())
+            n.destroy_node()
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
