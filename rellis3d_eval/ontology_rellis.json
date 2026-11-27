@@ -1,0 +1,239 @@
+{
+ "_note": "RELLIS-3D image-benchmark classes. 'prompt' can be a string ('a . b' = aggregation) or a list (addition: several queries, class score = max). 'traversability' (0 = blocked, 1 = free) and 'mu' are PLACEHOLDERS until we get Jaime's class JSON. 'eval_as' maps a prediction class onto a RELLIS eval class name when the names differ. 'rigid': whether the class's height counts as an obstacle (tree, log...) or not (grass, bush, mud: cost comes only from traversability).",
+ "classes": [
+  {
+   "id": 1,
+   "name": "grass",
+   "prompt": "grass . lawn",
+   "color": [
+    0,
+    102,
+    0
+   ],
+   "traversability": 0.9,
+   "mu": 0.45,
+   "rigid": false
+  },
+  {
+   "id": 2,
+   "name": "tree",
+   "prompt": "tree . tree trunk",
+   "color": [
+    0,
+    255,
+    0
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 3,
+   "name": "pole",
+   "prompt": "pole . post",
+   "color": [
+    153,
+    153,
+    0
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 4,
+   "name": "water",
+   "prompt": "water . pond . lake",
+   "color": [
+    255,
+    128,
+    0
+   ],
+   "traversability": 0.0,
+   "mu": 0.1,
+   "rigid": false
+  },
+  {
+   "id": 5,
+   "name": "sky",
+   "prompt": "sky",
+   "color": [
+    255,
+    0,
+    0
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": false
+  },
+  {
+   "id": 6,
+   "name": "vehicle",
+   "prompt": "vehicle . car . truck",
+   "color": [
+    0,
+    255,
+    255
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 7,
+   "name": "object",
+   "prompt": "object . box . equipment",
+   "color": [
+    127,
+    0,
+    255
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 8,
+   "name": "asphalt",
+   "prompt": "asphalt . paved road",
+   "color": [
+    64,
+    64,
+    64
+   ],
+   "traversability": 1.0,
+   "mu": 0.75,
+   "rigid": false
+  },
+  {
+   "id": 9,
+   "name": "building",
+   "prompt": "building . wall",
+   "color": [
+    0,
+    0,
+    255
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 10,
+   "name": "log",
+   "prompt": "log . fallen tree",
+   "color": [
+    0,
+    0,
+    102
+   ],
+   "traversability": 0.2,
+   "mu": 0.4,
+   "rigid": true
+  },
+  {
+   "id": 11,
+   "name": "person",
+   "prompt": "person . human",
+   "color": [
+    255,
+    153,
+    204
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 12,
+   "name": "fence",
+   "prompt": "fence",
+   "color": [
+    204,
+    0,
+    102
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 13,
+   "name": "bush",
+   "prompt": "bush . shrub",
+   "color": [
+    204,
+    153,
+    255
+   ],
+   "traversability": 0.3,
+   "mu": 0.4,
+   "rigid": false
+  },
+  {
+   "id": 14,
+   "name": "concrete",
+   "prompt": "concrete . pavement",
+   "color": [
+    170,
+    170,
+    170
+   ],
+   "traversability": 1.0,
+   "mu": 0.7,
+   "rigid": false
+  },
+  {
+   "id": 15,
+   "name": "barrier",
+   "prompt": "barrier . jersey barrier",
+   "color": [
+    255,
+    121,
+    41
+   ],
+   "traversability": 0.0,
+   "mu": 0.0,
+   "rigid": true
+  },
+  {
+   "id": 16,
+   "name": "puddle",
+   "prompt": "puddle",
+   "color": [
+    239,
+    255,
+    134
+   ],
+   "traversability": 0.5,
+   "mu": 0.25,
+   "rigid": false
+  },
+  {
+   "id": 17,
+   "name": "mud",
+   "prompt": "mud . soil",
+   "color": [
+    34,
+    66,
+    99
+   ],
+   "traversability": 0.6,
+   "mu": 0.3,
+   "rigid": false
+  },
+  {
+   "id": 18,
+   "name": "rubble",
+   "prompt": "rubble . gravel . rocks",
+   "color": [
+    138,
+    22,
+    110
+   ],
+   "traversability": 0.5,
+   "mu": 0.55,
+   "rigid": true
+  }
+ ]
+}
