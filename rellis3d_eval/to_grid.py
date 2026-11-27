@@ -27,7 +27,7 @@ import os
 import numpy as np
 
 
-def build_grid(m, res, trav, mu, rigid, min_pts=2, clearance=1.0):
+def build_grid(m, res, trav, mu, rigid, min_pts=2, clearance=1.0, unknown_rigid=True):
     xyz, probs = m["xyz"], m["probs"].astype(np.float32)
     seen = m["seen"] > 0
     lo = xyz[:, :2].min(0)
@@ -40,9 +40,10 @@ def build_grid(m, res, trav, mu, rigid, min_pts=2, clearance=1.0):
     # step = tallest thing within `clearance` of the ground; canopy the robot drives under doesn't count
     low = xyz[:, 2] <= zmin[flat] + clearance
     zmax = np.full(n, -np.inf); np.maximum.at(zmax, flat[low], xyz[low, 2])
-    # semantic step: only rigid classes (tree, log, rock...) or voxels no camera saw (unknown = assume rigid)
+    # semantic step: only rigid classes (tree, log, rock...), plus unknown voxels if unknown_rigid
+    # (pred: no camera saw it -> assume rigid; gt: void = nobody annotated it -> don't)
     p_rigid = probs @ rigid.astype(np.float32)
-    hard = low & ((p_rigid > 0.5) | ~seen)
+    hard = low & ((p_rigid > 0.5) | (~seen if unknown_rigid else False))
     zr = np.full(n, -np.inf); np.maximum.at(zr, flat[hard], xyz[hard, 2])
     s = seen.astype(float)
     ns = np.bincount(flat, s, n)
@@ -117,6 +118,8 @@ def main():
     ap.add_argument("--max-step", type=float, default=0.4, help="m; taller cells are obstacles")
     ap.add_argument("--risk", type=float, default=1.0, help="weight on trav_std (cautious planning)")
     ap.add_argument("--clearance", type=float, default=1.0, help="m above ground that counts for `step` (robot height + margin)")
+    ap.add_argument("--unknown-rigid", default="auto", choices=["auto", "yes", "no"],
+                    help="do unlabelled/unseen voxels block by height? auto: yes for pred, no for gt")
     ap.add_argument("--geometric", action="store_true", help="old rule: any height blocks, whatever the class")
     ap.add_argument("--source", default="pred", choices=["pred", "gt"],
                     help="pred = fused camera map; gt = LiDAR labels directly (clean map for controls)")
@@ -141,7 +144,8 @@ def main():
                 oh[m["gt"] == cls_names.index(nm), j] = 1
         valid = oh.sum(1) > 0
         m = {k: m[k] for k in m.files}; m["probs"] = oh; m["seen"] = valid.astype(np.int32)   # every labelled voxel counts as seen
-    G = build_grid(m, a.res, trav, mu, rigid, clearance=a.clearance)
+    unk_rigid = (a.source == "pred") if a.unknown_rigid == "auto" else (a.unknown_rigid == "yes")
+    G = build_grid(m, a.res, trav, mu, rigid, clearance=a.clearance, unknown_rigid=unk_rigid)
     out = a.map_npz.replace(".npz", f"_grid{a.res}{'_gt' if a.source == 'gt' else ''}.npz")
     np.savez_compressed(out, **G)
     v = ~np.isnan(G["trav_mean"]) & ~np.isnan(G["gt_trav"])
