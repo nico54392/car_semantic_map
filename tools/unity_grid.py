@@ -7,6 +7,8 @@ python tools/unity_grid.py ~/nico_ws/scenes/flat_mix                 # -> <scene
 python tools/unity_grid.py ~/nico_ws/scenes/flat_mix --res 0.1 --trav mud=0.05
 python tools/unity_grid.py ~/nico_ws/scenes/flat_mix --source ai     # from embedded_map.npz (feature_map.py build)
                                                                      # -> <scene>/grid/ai_grid0.5.npz, GT kept as gt_trav
+python tools/unity_grid.py ~/nico_ws/scenes/live_20261127_184500 --source ai   # live map (semantic_mapper save):
+                                                                     # no Unity labels there, so no gt_trav
 """
 import argparse, sys
 from pathlib import Path
@@ -32,30 +34,37 @@ def main():
     ap.add_argument("--weights", default=None, help="--source ai: backbone weights override")
     a = ap.parse_args()
 
-    sc = load_scene(a.scene, max_views=1)
-    P, L = sc.points, sc.point_labels.astype(int)
-    ids = sorted(c for c in sc.classes if c != 0)
-    names = [sc.classes[c] for c in ids]
-    col = {c: k for k, c in enumerate(ids)}
-    keep = np.isin(L, ids)                                  # void points carry no class
-    P, L = P[keep], np.array([col[c] for c in L[keep]])
-    onehot = np.eye(len(ids))[L]
     over = {k.strip(): float(v) for k, v in (kv.split("=") for kv in a.trav)}
     onto = load_ontology(Path(a.ontology))
+    if (Path(a.scene) / "scene.json").exists():
+        sc = load_scene(a.scene, max_views=1)
+        P, L = sc.points, sc.point_labels.astype(int)
+        ids = sorted(c for c in sc.classes if c != 0)
+        names = [sc.classes[c] for c in ids]
+        col = {c: k for k, c in enumerate(ids)}
+        keep = np.isin(L, ids)                              # void points carry no class
+        P, L = P[keep], np.array([col[c] for c in L[keep]])
+    elif a.source == "ai":
+        P = None                                            # live map from semantic_mapper: no labels
+        print("no scene.json (live map): AI grid without gt_trav")
+    else:
+        sys.exit(f"{a.scene}: no scene.json. A live map has no labels, use --source ai")
     if a.source == "gt":
+        onehot = np.eye(len(ids))[L]
         g = cg.from_points(P, onehot, names, onto, res=a.res, unknown=a.unknown, gt_labels=L, trav_override=over)
     else:
         sys.path.insert(0, str(ROOT / "tools"))
         from feature_map import EmbeddedMap
-        from scipy.spatial import cKDTree
         m = EmbeddedMap(a.scene, a.weights, a.ontology)
         cn, pr = m.classify()                               # (N,K) over ontology classes, NaN where unseen
         seen = m.seen
         Pm, pr = m.points[seen], pr[seen]
-        # GT per map point (nearest labelled GT point) only for scoring: gt_trav
-        _, nn = cKDTree(P).query(Pm)
-        gt_names = [names[k] for k in L[nn]]
-        gl = np.array([cn.index(n) if n in cn else -1 for n in gt_names])
+        gl = None
+        if P is not None:                                   # GT per map point (nearest labelled GT point), for scoring
+            from scipy.spatial import cKDTree
+            _, nn = cKDTree(P).query(Pm)
+            gt_names = [names[k] for k in L[nn]]
+            gl = np.array([cn.index(n) if n in cn else -1 for n in gt_names])
         g = cg.from_points(Pm, pr, cn, onto, res=a.res, unknown=a.unknown, gt_labels=gl, trav_override=over)
         names = cn
     out = Path(a.out) if a.out else Path(a.scene) / "grid" / f"{a.source}_grid{a.res:g}.npz"
