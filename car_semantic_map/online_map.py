@@ -28,6 +28,13 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 
 
+
+def to_np(x):
+    """torch tensor (any device, grad or not) or array -> numpy"""
+    if hasattr(x, "detach"):
+        x = x.detach().float().cpu().numpy()
+    return np.asarray(x)
+
 class OnlineEmbeddingMap:
     def __init__(self, extractor=None, backbone="pe-b", voxel=0.1, max_depth=5.0, min_depth=0.2,
                  stride=4, ontology=ROOT / "config" / "ontology.json", temperature=100.0, synonym=0.85):
@@ -79,7 +86,7 @@ class OnlineEmbeddingMap:
         labels: optional HxW int GT ids (Unity) -> per-voxel votes for scoring. Returns #points added."""
         if features is None:
             f = self.ex.image_features(rgb)
-            features = f.numpy() if hasattr(f, "numpy") else np.asarray(f)
+            features = to_np(f)
         C, h, w = features.shape
         H, W = depth.shape
         pw, u, v = self.backproject(depth, K, T_world_cam)
@@ -132,14 +139,14 @@ class OnlineEmbeddingMap:
     # ------------------------------------------------------------------ queries
     def _text(self, prompts):
         q = self.ex.query_features(prompts)
-        return q.numpy() if hasattr(q, "numpy") else np.asarray(q)
+        return to_np(q)
 
     def _classes(self, exclude=()):
         key = tuple(sorted(exclude))
         if key not in self._class_cache:
             names = [n for n in self.onto if n not in exclude]
             Q, own = self.ex.class_features([self.onto[n].get("prompts", [n]) for n in names])
-            self._class_cache[key] = (names, Q.numpy() if hasattr(Q, "numpy") else np.asarray(Q), np.asarray(own))
+            self._class_cache[key] = (names, to_np(Q), np.asarray(own))
         return self._class_cache[key]
 
     def score(self, prompt, mode="prob"):

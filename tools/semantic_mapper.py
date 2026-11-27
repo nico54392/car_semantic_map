@@ -42,7 +42,8 @@ from tf2_ros import Buffer, TransformListener
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from car_semantic_map.online_map import OnlineEmbeddingMap          # noqa: E402
+from car_semantic_map.online_map import OnlineEmbeddingMap, to_np   # noqa: E402
+import torch                                                          # noqa: E402
 
 
 # ---------------------------------------------------------------- message helpers (no cv_bridge needed)
@@ -233,8 +234,9 @@ class SemanticMapper(Node):
         while True:
             rgb, depth, K, T = self.jobs.get()
             t0 = time.time()
-            feats = self.map.ex.image_features(rgb)            # GPU, outside the lock
-            feats = feats.numpy() if hasattr(feats, "numpy") else feats
+            with torch.inference_mode():
+                feats = self.map.ex.image_features(rgb)        # GPU, outside the lock
+            feats = to_np(feats)
             with self.lock:
                 n = self.map.insert(rgb, depth, K, T, features=feats)
                 self.dirty = True
