@@ -16,6 +16,9 @@ Loop: pose from /odom_unity -> prompt -> 3D mask -> pick the blob (nearest by de
 traversability grid from the robot's CURRENT position -> Nav2 (MPPI) or pure pursuit -> next prompt.
 
 At the prompt:  any text = go there  |  "x y" = go to map coordinates  |  stop  |  list  |  where  |  quit
+Which one:  closest/nearest (default), farthest, biggest, smallest, + 2nd/third...; on my left/right, in front,
+behind me (from the robot's heading); "<thing> near the <other thing>"; "the farthest one" reuses the last
+thing asked for; "go back" = where the last goal started, "back to start" = the first start.
 While driving: type "stop" (or a new prompt, which replaces the current goal).
 
 Same frames as goal_from_prompt.py / ros2_follow_path.py: map = ROS FLU from the Unity export, and
@@ -36,6 +39,53 @@ from feature_map import grid, astar, ONTOLOGY                  # noqa: E402
 from goal_from_prompt import clean_prompt, clusters           # noqa: E402
 
 
+# ---------------------------------------------------------------- what the prompt asks for
+
+ORDINAL = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "fourth": 3, "4th": 3, "fifth": 4, "5th": 4}
+ORDER = {"closest": "near", "nearest": "near", "farthest": "far", "furthest": "far", "biggest": "big",
+         "largest": "big", "smallest": "small"}
+GENERIC = r"(patch|patches|area|areas|spot|spots|one|ones|bit|region|zone|place|part)"
+
+
+def parse_request(text):
+    """'the second closest gravel patch on my left near the bench' ->
+    dict(target='gravel', order='near', rank=1, side='left', ref='bench', special=None)"""
+    t = re.sub(r"^((now|then|next|and|ok|okay|alright|please)[,!]?\s+)+", "", text.strip().lower()).strip(" .!?")
+    r = dict(target=None, order=None, rank=0, side=None, ref=None, special=None)
+    if re.fullmatch(r"(go |drive |head )?(back )?(to )?(the )?(start|beginning|home)|return( to (the )?(start|beginning))?", t):
+        r["special"] = "start"; return r
+    if re.fullmatch(r"(go |drive |head )?back|return|undo", t):
+        r["special"] = "back"; return r
+    m = re.search(r"\s+(near|next to|by|close to|beside|around)\s+(the\s+|a\s+|an\s+)?(.+)$", t)
+    if m:
+        r["ref"] = clean_prompt(m.group(3)); t = t[:m.start()]
+    for pat, side in [(r"\b(on|to)\s+(my|the)\s+left\b|\bleft of me\b", "left"),
+                      (r"\b(on|to)\s+(my|the)\s+right\b|\bright of me\b", "right"),
+                      (r"\bin front( of me)?\b|\bahead( of me)?\b", "front"), (r"\bbehind( me)?\b", "behind")]:
+        if re.search(pat, t):
+            r["side"] = side; t = re.sub(pat, " ", t)
+    for w, k in ORDINAL.items():
+        if re.search(rf"\b{w}\b", t):
+            r["rank"] = k; t = re.sub(rf"\b{w}\b", " ", t)
+    for w, o in ORDER.items():
+        if re.search(rf"\b{w}\b", t):
+            r["order"] = o; t = re.sub(rf"\b{w}\b", " ", t)
+    t = clean_prompt(re.sub(r"\s+", " ", t).strip())
+    t = re.sub(rf"(\s+{GENERIC})+$", "", t).strip()
+    t = re.sub(r"^(the|a|an)\s+", "", t).strip()
+    r["target"] = None if t in ("", "the", GENERIC) or re.fullmatch(GENERIC, t) else t
+    return r
+
+
+def bearing_ok(side, robot_xy, yaw, xy):
+    if side is None or yaw is None:
+        return True
+    rel = math.atan2(xy[1] - robot_xy[1], xy[0] - robot_xy[0]) - yaw
+    rel = math.degrees((rel + math.pi) % (2 * math.pi) - math.pi)
+    return {"front": abs(rel) < 60, "behind": abs(rel) > 120,
+            "left": 30 < rel < 150, "right": -150 < rel < -30}[side]
+
+
 # ---------------------------------------------------------------- planner (no ROS)
 
 class PromptPlanner:
@@ -44,6 +94,7 @@ class PromptPlanner:
         self.scene, self.mode, self.cell = Path(scene), mode, cell
         self.unknown, self.thresh, self.synonym = unknown, thresh, synonym
         self.standoff, self.min_trav, self.pick = standoff, min_trav, pick
+        self.history, self.last_target = [], None        # where each goal started from; last thing asked for
         self.onto = load_ontology(Path(ontology))
         if mode == "gt":
             from car_semantic_map.scene_io import load_scene
@@ -82,7 +133,13 @@ class PromptPlanner:
         """-> (point mask, is_drivable_target, message)"""
         if self.mode == "gt":
             ids = {n: c for c, n in self.classes.items()}
-            name = text if text in ids else (text[:-1] if text.endswith("s") and text[:-1] in ids else None)
+            name = None
+            for cand in [text] + text.split()[::-1]:      # "big tree" -> "tree", "puddles" -> "puddle"
+                for c in (cand, cand[:-1] if cand.endswith("s") else None, cand[:-2] if cand.endswith("es") else None):
+                    if c and c in ids and c != "void":
+                        name = c; break
+                if name:
+                    break
             if name is None:
                 return None, False, f'"{text}" is not a class in this scene. Classes: {", ".join(self.names)}'
             mask = self.L == ids[name]
@@ -106,36 +163,86 @@ class PromptPlanner:
             drivable = np.nanmean(self.trav_pt[mask]) >= self.min_trav
         return mask, drivable, msg
 
-    def plan(self, text, start_xy):
+    def plan(self, text, start_xy, yaw=None):
         """-> dict(waypoints (N,3) ros, goal, ...) or (None, reason)"""
         start = self.cell_of(start_xy)
         tg = self.tg
         coords = re.fullmatch(r"\s*(-?\d+(\.\d+)?)[ ,]+(-?\d+(\.\d+)?)\s*", text)
-        if coords:
+        req = None if coords else parse_request(text)
+        if req and req["special"]:                     # "go back" / "back to start"
+            if not self.history:
+                return None, "nowhere to go back to yet"
+            gxy = self.history[0] if req["special"] == "start" else self.history[-1]
+            coords, label = True, req["special"]
+            cands, drivable = [self.cell_of(gxy)], True
+            msg = f"going back to {'the start' if req['special'] == 'start' else 'where you were before'} ({gxy[0]:.1f}, {gxy[1]:.1f})"
+        elif coords:
             gxy = np.array([float(coords.group(1)), float(coords.group(3))])
             cands, label, drivable = [self.cell_of(gxy)], "xy", True
             hi = self.lo + self.shape * self.cell
             msg = "goal by coordinates" + ("" if np.all((gxy >= self.lo) & (gxy <= hi)) else
                   f" (OUTSIDE the map x {self.lo[0]:.1f}..{hi[0]:.1f}, y {self.lo[1]:.1f}..{hi[1]:.1f}: clamped to the edge)")
         else:
-            text = clean_prompt(re.sub(r"^((now|then|next|and|ok|okay|alright)[,!]?\s+)+", "", text.strip().lower()))
+            text = req["target"] or self.last_target       # "the farthest one" -> same thing as last time
+            if not text:
+                return None, "what should I look for? e.g. 'the farthest gravel patch'"
             mask, drivable, msg = self.mask_for(text)
             if mask is None:
                 return None, msg
-            if not drivable:                  # object/obstacle: its own cells are walls
-                tg = tg.copy()
-                ij = np.floor((self.P[mask, :2] - self.lo) / self.cell).astype(int)
-                tg[ij[:, 0], ij[:, 1]] = 0.0
+            self.last_target = text
             cl, lab = clusters(self.P, mask, self.cell, self.lo, self.tg.shape)
+            # the blob the robot is standing in / right next to (within the standoff)
+            r = int(np.ceil(max(self.standoff, 0.75) / self.cell))
+            i0, j0 = start
+            here_ids = set(np.unique(lab[max(0, i0 - r):i0 + r + 1, max(0, j0 - r):j0 + r + 1])) - {0}
+            if not drivable:                  # object/obstacle: its cells are walls, except the one we're in
+                tg = tg.copy()
+                wall = (lab > 0) & ~np.isin(lab, list(here_ids))
+                tg[wall] = 0.0
             if not cl:
                 return None, msg + "; no blob bigger than one cell"
+            sxy = np.asarray(start_xy, float)
             for c in cl:
-                c["d"] = float(np.linalg.norm(c["centroid"][:2] - np.asarray(start_xy)))
-            order = sorted(cl, key=lambda c: c["d"]) if self.pick == "nearest" else \
-                sorted(cl, key=lambda c: -c["n_points"])
+                c["d"] = float(np.linalg.norm(c["centroid"][:2] - sxy))
+            why = []
+            if req["side"]:                               # direction relative to the robot's heading
+                if yaw is None:
+                    why.append(f"(no heading known, ignoring '{req['side']}')")
+                else:
+                    cl2 = [c for c in cl if bearing_ok(req["side"], sxy, yaw, c["centroid"][:2])]
+                    if not cl2:
+                        return None, msg + f"; none of the {len(cl)} blob(s) is {dict(left='on your left', right='on your right', front='in front of you', behind='behind you')[req['side']]}"
+                    where = {"left": "on your left", "right": "on your right", "front": "in front of you", "behind": "behind you"}[req["side"]]
+                    why.append(f"{len(cl2)} of {len(cl)} {where}"); cl = cl2
+            if req["ref"]:                                # "... near the bench": rank by distance to the bench
+                rmask, _, rmsg = self.mask_for(req["ref"])
+                if rmask is None:
+                    return None, msg + f"; reference '{req['ref']}': {rmsg}"
+                from scipy.spatial import cKDTree
+                tree = cKDTree(self.P[rmask, :2])
+                for c in cl:
+                    pts = self.lo + (np.argwhere(lab == c["id"]) + 0.5) * self.cell
+                    c["d_ref"] = float(tree.query(pts)[0].min())
+                key = lambda c: c["d_ref"]
+                why.append(f"ranked by distance to the {req['ref']}")
+            else:
+                o = req["order"] or ("near" if self.pick == "nearest" else "big")
+                key = {"near": lambda c: c["d"], "far": lambda c: -c["d"],
+                       "big": lambda c: -c["n_points"], "small": lambda c: c["n_points"]}[o]
+                word = {"near": "closest", "far": "farthest", "big": "biggest", "small": "smallest"}[o]
+            order = sorted(cl, key=key)
+            here = [c for c in cl if c["id"] in here_ids]
+            if here and not req["ref"] and not req["side"] and req["rank"] == 0 and (req["order"] or "near") == "near":
+                return None, msg + f"; you're already at a {text} (ask for 'the second closest' or 'the farthest' to go to another)"
+            if here and (req["order"] in ("far", "big", "small") or req["rank"] or req["side"] or req["ref"]):
+                order = [c for c in order if c["id"] not in here_ids] or order    # "another one", not this one
+            if req["rank"] >= len(order):
+                return None, msg + f"; asked for #{req['rank'] + 1} but there are only {len(order)} blob(s)" + \
+                    (f" ({', '.join(why)})" if why else "")
+            order = order[req["rank"]:]
             label = text
             path = None
-            for k, obj in enumerate(order[:8]):           # nearest blob first; skip ones we can't reach
+            for k, obj in enumerate(order[:8]):           # requested blob first; skip ones we can't reach
                 blob = lab == obj["id"]
                 if drivable:                              # drive onto it: its cells
                     cands = [tuple(c) for c in np.argwhere(blob)]
@@ -146,12 +253,18 @@ class PromptPlanner:
                     cands = [tuple(c) for c in np.argwhere(ring)]
                 path, cost = self._reach(tg, start, cands)
                 if path:
-                    msg += f"; {len(cl)} blob(s), going to " + \
-                           (f"the {'nearest' if self.pick == 'nearest' else 'largest'}" if k == 0 else f"#{k + 1} (closer ones unreachable)") + \
-                           f" ({obj['d']:.1f} m away, {'drive onto it' if drivable else f'stop {self.standoff} m in front'})"
+                    nth = ["", "2nd ", "3rd ", "4th ", "5th "][req["rank"]] if req["rank"] < 5 else f"#{req['rank'] + 1} "
+                    pick = (f"the {nth}closest to the {req['ref']} ({obj['d_ref']:.1f} m from it)" if req["ref"]
+                            else f"the {nth}{word}")
+                    if k:
+                        pick += f" (skipped {k} unreachable)"
+                    msg += f"; {len(cl)} blob(s)" + (f", {', '.join(why)}" if why else "") + \
+                           f"; going to {pick}, {obj['d']:.1f} m away, " + \
+                           ("drive onto it" if drivable else f"stop {self.standoff} m in front")
                     break
             if not path:
-                return None, msg + f"; none of the {min(len(order), 8)} nearest blobs is reachable (try --standoff / --min_trav)"
+                return None, msg + "; none of the candidate blobs is reachable (try --standoff / --min_trav)"
+            self.last_target = text
         if coords:
             path, cost = self._reach(tg, start, cands)
             if not path:
@@ -173,6 +286,10 @@ class PromptPlanner:
         json.dump(res, open(out / "path.json", "w"), indent=1)
         self._png(out / "plan.png", xy, label)
         res["dir"] = str(out)
+        if label != "back":
+            self.history.append(np.asarray(start_xy, float).copy())
+        elif len(self.history) > 1:
+            self.history.pop()
         return res, msg
 
     def _png(self, path, xy, label, traj=None):
@@ -201,7 +318,8 @@ def reader(q):
             q.put("quit"); return
 
 
-HELP = 'type a place ("go to the puddle"), "x y", stop, list, where, quit'
+HELP = ('type a place: "go to the puddle", "the farthest gravel patch", "second closest bush on my left", '
+        '"the mud near the bench", "go back", "back to start", "x y" | stop, list, where, quit')
 
 
 def handle_meta(cmd, planner, pose):
@@ -227,7 +345,7 @@ def run_sim(planner, a):
             return
         if not cmd or cmd == "stop" or handle_meta(cmd, planner, pose):
             continue
-        res, msg = planner.plan(cmd, pose[:2])
+        res, msg = planner.plan(cmd, pose[:2], pose[2])
         print("  " + msg)
         if res is None:
             continue
@@ -385,7 +503,7 @@ def run_ros(planner, a):
                 node.halt(); print("  stopped\n> ", end="", flush=True); continue
             if not cmd or handle_meta(cmd, planner, node.pose):
                 print("> ", end="", flush=True); continue
-            res, msg = planner.plan(cmd, node.pose[:2])
+            res, msg = planner.plan(cmd, node.pose[:2], node.pose[2])
             print("  " + msg)
             if res is None or res["path_length_m"] < 0.5:
                 print("  already there\n> " if res else "> ", end="", flush=True); continue
