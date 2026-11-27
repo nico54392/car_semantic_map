@@ -5,6 +5,8 @@ tools write. GT labels give one-hot probabilities, so trav_std is 0 except where
 
 python tools/unity_grid.py ~/nico_ws/scenes/flat_mix                 # -> <scene>/grid/gt_grid0.5.npz + preview png
 python tools/unity_grid.py ~/nico_ws/scenes/flat_mix --res 0.1 --trav mud=0.05
+python tools/unity_grid.py ~/nico_ws/scenes/flat_mix --source ai     # from embedded_map.npz (feature_map.py build)
+                                                                     # -> <scene>/grid/ai_grid0.5.npz, GT kept as gt_trav
 """
 import argparse, sys
 from pathlib import Path
@@ -25,6 +27,9 @@ def main():
     ap.add_argument("--ontology", default=str(ROOT / "config" / "ontology.json"))
     ap.add_argument("--trav", nargs="*", default=[], metavar="CLASS=VALUE")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--source", choices=["gt", "ai"], default="gt",
+                    help="gt = Unity labels; ai = class probabilities from the embedded map (same backbone it was built with)")
+    ap.add_argument("--weights", default=None, help="--source ai: backbone weights override")
     a = ap.parse_args()
 
     sc = load_scene(a.scene, max_views=1)
@@ -36,9 +41,24 @@ def main():
     P, L = P[keep], np.array([col[c] for c in L[keep]])
     onehot = np.eye(len(ids))[L]
     over = {k.strip(): float(v) for k, v in (kv.split("=") for kv in a.trav)}
-    g = cg.from_points(P, onehot, names, load_ontology(Path(a.ontology)), res=a.res, unknown=a.unknown,
-                       gt_labels=L, trav_override=over)
-    out = Path(a.out) if a.out else Path(a.scene) / "grid" / f"gt_grid{a.res:g}.npz"
+    onto = load_ontology(Path(a.ontology))
+    if a.source == "gt":
+        g = cg.from_points(P, onehot, names, onto, res=a.res, unknown=a.unknown, gt_labels=L, trav_override=over)
+    else:
+        sys.path.insert(0, str(ROOT / "tools"))
+        from feature_map import EmbeddedMap
+        from scipy.spatial import cKDTree
+        m = EmbeddedMap(a.scene, a.weights, a.ontology)
+        cn, pr = m.classify()                               # (N,K) over ontology classes, NaN where unseen
+        seen = m.seen
+        Pm, pr = m.points[seen], pr[seen]
+        # GT per map point (nearest labelled GT point) only for scoring: gt_trav
+        _, nn = cKDTree(P).query(Pm)
+        gt_names = [names[k] for k in L[nn]]
+        gl = np.array([cn.index(n) if n in cn else -1 for n in gt_names])
+        g = cg.from_points(Pm, pr, cn, onto, res=a.res, unknown=a.unknown, gt_labels=gl, trav_override=over)
+        names = cn
+    out = Path(a.out) if a.out else Path(a.scene) / "grid" / f"{a.source}_grid{a.res:g}.npz"
     out.parent.mkdir(parents=True, exist_ok=True)
     cg.save(out, g)
     X, Y = g["seen"].shape

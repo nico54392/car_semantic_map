@@ -6,9 +6,14 @@ Type a prompt, the robot drives there, type the next one.  "go to the puddle" ->
     python tools/prompt_drive.py <scene> --map ai          # embedded map (feature_map.py build): open vocabulary
     python tools/prompt_drive.py <scene> --map gt --sim --start 0 0   # no ROS: simulated unicycle, for testing
 
+Driving: --controller nav2 (default) picks the goal here and hands it to Nav2 (navigate_to_pose): Nav2's planner
+(SmacPlanner2D on the nav2_map.py cost map) plans and its controller drives -- MPPI if launched with
+controller:=mppi. Build Nav2's map from the SAME source as --map (unity_grid.py [--source ai] -> nav2_map.py).
+--controller pp drives our own A* path with pure pursuit, no Nav2 needed (debugging).
+
 Loop: pose from /odom_unity -> prompt -> 3D mask -> pick the blob (nearest by default) -> goal
 (drivable class: on the blob; obstacle/object: on a ring --standoff m around it) -> A* on the
-traversability grid from the robot's CURRENT position -> pure pursuit -> /cmd_vel -> next prompt.
+traversability grid from the robot's CURRENT position -> Nav2 (MPPI) or pure pursuit -> next prompt.
 
 At the prompt:  any text = go there  |  "x y" = go to map coordinates  |  stop  |  list  |  where  |  quit
 While driving: type "stop" (or a new prompt, which replaces the current goal).
@@ -92,7 +97,8 @@ class PromptPlanner:
         if not mask.any():
             top = best_other[np.nan_to_num(p) > np.nanpercentile(p, 99)]
             u, c = np.unique(top, return_counts=True)
-            msg += f"; nothing found. Its best points belong to {dict(zip(u, c))}: try other words"
+            top3 = ", ".join(f"{n} ({k})" for n, k in sorted(zip(map(str, u), map(int, c)), key=lambda t: -t[1])[:3])
+            msg += f"; nothing found. Its best points belong to: {top3}. Try other words"
             return None, False, msg
         t = self.onto.get(text, {}).get("traversability")
         drivable = t is not None and t >= self.min_trav
@@ -250,14 +256,22 @@ def run_ros(planner, a):
     from rclpy.qos import qos_profile_sensor_data
     from geometry_msgs.msg import Twist, PoseStamped
     from nav_msgs.msg import Odometry, Path as PathMsg
+    if a.controller == "nav2":
+        from rclpy.action import ActionClient
+        from nav2_msgs.action import NavigateToPose
 
     class Driver(Node):
         def __init__(self):
             super().__init__("prompt_drive")
             self.create_subscription(Odometry, a.pose_topic, self.on_pose, qos_profile_sensor_data)
+            self.create_subscription(Twist, a.cmd_vel_topic, self.on_cmd, 10)
             self.cmd = self.create_publisher(Twist, a.cmd_vel_topic, 10)
             self.path_pub = self.create_publisher(PathMsg, "/prompt_drive/path", 1)
             self.pose, self.t_pose, self.pp, self.path_msg = None, 0.0, None, None
+            self.gh, self.active, self.last_cmd = None, False, (0.0, 0.0)
+            self.log, self.log_dir, self.t0 = [], None, None
+            if a.controller == "nav2":
+                self.ac = ActionClient(self, NavigateToPose, "navigate_to_pose")
             self.create_timer(1.0 / a.rate, self.tick)
             self.create_timer(1.0, lambda: self.path_msg and self.path_pub.publish(self.path_msg))
 
@@ -269,34 +283,91 @@ def run_ros(planner, a):
                          yaw + a.offset[2] + math.radians(a.heading_offset_deg))
             self.t_pose = time.time()
 
+        def on_cmd(self, m):
+            self.last_cmd = (m.linear.x, m.angular.z)
+
+        # ---- one goal
         def go(self, res):
-            self.pp = PurePursuit([w[:2] for w in res["waypoints_ros"]], lookahead=a.lookahead, v_max=a.v_max,
-                                  w_max=a.w_max, goal_tol=a.goal_tol)
+            self.halt(quiet=True)
+            wp = np.array(res["waypoints_ros"])
             self.path_msg = PathMsg(); self.path_msg.header.frame_id = "map"
-            for x, y, z in res["waypoints_ros"]:
+            for x, y, z in wp:
                 ps = PoseStamped(); ps.header.frame_id = "map"
                 ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = float(x), float(y), float(z)
                 self.path_msg.poses.append(ps)
+            self.log, self.log_dir, self.t0, self.active = [], Path(res["dir"]), time.time(), True
+            if a.controller == "pp":
+                self.pp = PurePursuit(wp[:, :2], lookahead=a.lookahead, v_max=a.v_max, w_max=a.w_max, goal_tol=a.goal_tol)
+                return
+            # Nav2: send the final pose, heading along the last stretch of our path; Nav2 plans + MPPI drives
+            d = wp[-1, :2] - wp[max(0, len(wp) - 5), :2]
+            yaw = math.atan2(d[1], d[0]) if np.hypot(*d) > 1e-3 else self.pose[2]
+            g = NavigateToPose.Goal()
+            g.pose = PoseStamped(); g.pose.header.frame_id = "map"
+            g.pose.header.stamp = self.get_clock().now().to_msg()
+            g.pose.pose.position.x, g.pose.pose.position.y = float(wp[-1, 0]), float(wp[-1, 1])
+            g.pose.pose.orientation.z, g.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+            if not self.ac.wait_for_server(timeout_sec=2.0):
+                print("  Nav2 isn't running (no navigate_to_pose). Start it, or use --controller pp\n> ", end="", flush=True)
+                self.active = False; return
+            fut = self.ac.send_goal_async(g)
+            fut.add_done_callback(self.on_accept)
 
-        def halt(self):
-            self.pp = None; self.cmd.publish(Twist())
+        def on_accept(self, fut):
+            gh = fut.result()
+            if not gh.accepted:
+                print("\n  Nav2 rejected the goal\n> ", end="", flush=True); self.finish(); return
+            self.gh = gh
+            gh.get_result_async().add_done_callback(self.on_result)
+
+        def on_result(self, fut):
+            status = fut.result().status          # 4 succeeded, 5 canceled, 6 aborted
+            if status == 5:
+                return
+            where = f"({self.pose[0]:.1f}, {self.pose[1]:.1f})" if self.pose else ""
+            print(f"\n  {'arrived' if status == 4 else f'Nav2 gave up (status {status})'} {where}. next?\n> ",
+                  end="", flush=True)
+            self.finish()
+
+        def halt(self, quiet=False):
+            if self.gh is not None:
+                self.gh.cancel_goal_async(); self.gh = None
+            self.pp = None
+            self.cmd.publish(Twist())
+            if self.active:
+                self.finish()
+
+        def finish(self):
+            self.active, self.gh, self.pp = False, None, None
+            if self.log and self.log_dir:
+                f = self.log_dir / time.strftime("run_%Y%m%d_%H%M%S.csv")
+                with open(f, "w") as fh:
+                    fh.write("t,x,y,yaw,v_cmd,w_cmd\n")
+                    for r in self.log:
+                        fh.write(",".join(f"{v:.4f}" for v in r) + "\n")
+            self.log = []
 
         def tick(self):
-            if self.pp is None:
+            if not self.active:
+                return
+            if self.pose is not None:
+                self.log.append((time.time() - self.t0, *self.pose, *self.last_cmd))
+            if self.pp is None:                 # Nav2 drives; we only log
                 return
             tw = Twist()
             if self.pose is None or time.time() - self.t_pose > a.pose_timeout:
-                self.cmd.publish(tw); return               # stale pose: stand still
+                self.cmd.publish(tw); return     # stale pose: stand still
             v, w, done = self.pp.step(*self.pose)
             tw.linear.x, tw.angular.z = float(v), float(w)
             self.cmd.publish(tw)
             if done:
-                self.halt()
+                self.cmd.publish(Twist()); self.finish()
                 print(f"\n  arrived at ({self.pose[0]:.1f}, {self.pose[1]:.1f}). next?\n> ", end="", flush=True)
 
     rclpy.init()
     node = Driver()
     q = queue.Queue(); threading.Thread(target=reader, args=(q,), daemon=True).start()
+    print(f"controller: {'Nav2 (planner + controller from your launch, e.g. MPPI)' if a.controller == 'nav2' else 'pure pursuit (no Nav2)'}")
     print(f"waiting for {a.pose_topic} ...")
     try:
         while rclpy.ok() and node.pose is None:
@@ -318,7 +389,7 @@ def run_ros(planner, a):
             print("  " + msg)
             if res is None or res["path_length_m"] < 0.5:
                 print("  already there\n> " if res else "> ", end="", flush=True); continue
-            print(f"  path {res['path_length_m']:.1f} m, mean traversability {res['mean_trav_on_path']:.2f}: driving "
+            print(f"  our path {res['path_length_m']:.1f} m, mean traversability {res['mean_trav_on_path']:.2f}: driving "
                   f"(type stop or a new place)\n> ", end="", flush=True)
             node.go(res)
     except KeyboardInterrupt:
@@ -332,6 +403,8 @@ def main():
     ap.add_argument("scene")
     ap.add_argument("--map", choices=["gt", "ai"], default="gt", help="gt = Unity labels, ai = embedded_map.npz")
     ap.add_argument("--sim", action="store_true", help="no ROS: simulated robot")
+    ap.add_argument("--controller", choices=["nav2", "pp"], default="nav2",
+                    help="nav2: send the goal to Nav2 (launch it with controller:=mppi); pp: our pure pursuit, no Nav2")
     ap.add_argument("--start", type=float, nargs=2, default=[0.0, 0.0], help="--sim start x y (map frame)")
     ap.add_argument("--start_yaw", type=float, default=0.0, help="--sim start heading, deg")
     ap.add_argument("--cell", type=float, default=0.25)

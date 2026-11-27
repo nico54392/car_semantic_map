@@ -57,6 +57,10 @@ def target_probability(m, text, temperature=100.0, synonym=0.85):
         cs = np.array([tsim[own == k].max() for k in range(len(names))])
         dropped = [(names[k], round(float(cs[k]), 2)) for k in np.nonzero(cs >= synonym)[0]]
         neg = [n for k, n in enumerate(names) if cs[k] < synonym]
+        if not neg:                     # everything looks like a synonym: keep all but the closest few to compete
+            keep = np.argsort(cs)[: max(1, len(names) - 3)]
+            neg = [names[k] for k in sorted(keep)]
+            dropped = [d for d in dropped if d[0] not in neg]
     t_score = (m.feat @ tq.T).max(1).values                      # best of the target's prompts
     Q, owner = m.enc.class_features([onto[n]["prompts"] for n in neg])
     sims = m.feat @ Q.T
