@@ -1,0 +1,138 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Help Height: 0
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 60
+      Reference Frame: <Fixed Frame>
+      Color: 160; 160; 164
+      Alpha: 0.3
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: false
+      Marker Scale: 0.5
+    - Class: rviz_default_plugins/PointCloud2
+      Name: "map: prompt score (intensity)"
+      Enabled: true
+      Topic:
+        Value: /semantic_map/cloud
+        Depth: 1
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+      Style: Boxes
+      Size (m): 0.09
+      Alpha: 1
+      Color Transformer: Intensity
+      Channel Name: intensity
+      Use rainbow: false
+      Invert Rainbow: false
+      Min Color: 40; 40; 60
+      Max Color: 255; 230; 0
+      Autocompute Intensity Bounds: false
+      Min Intensity: 0
+      Max Intensity: 1
+      Decay Time: 0
+      Position Transformer: XYZ
+      Queue Size: 2
+      Selectable: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: "map: real colour"
+      Enabled: false
+      Topic:
+        Value: /semantic_map/cloud
+        Depth: 1
+        Reliability Policy: Reliable
+      Style: Boxes
+      Size (m): 0.09
+      Alpha: 1
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+      Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: "matches (score >= threshold)"
+      Enabled: true
+      Topic:
+        Value: /semantic_map/matches
+        Depth: 1
+        Reliability Policy: Reliable
+      Style: Boxes
+      Size (m): 0.12
+      Alpha: 1
+      Color Transformer: FlatColor
+      Color: 255; 40; 40
+      Position Transformer: XYZ
+      Decay Time: 0
+    - Class: rviz_default_plugins/PoseArray
+      Name: "keyframes (camera track)"
+      Enabled: true
+      Topic:
+        Value: /semantic_map/keyframes
+        Depth: 1
+        Reliability Policy: Reliable
+      Shape: Arrow (Flat)
+      Color: 0; 255; 255
+      Arrow Length: 0.4
+    - Class: rviz_default_plugins/Image
+      Name: camera
+      Enabled: true
+      Topic:
+        Value: /camera/color/image_raw
+        Depth: 1
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Path
+      Name: "Nav2 plan"
+      Enabled: true
+      Topic:
+        Value: /plan
+        Depth: 1
+      Color: 255; 80; 80
+      Line Style: Lines
+    - Class: rviz_default_plugins/Path
+      Name: "prompt_drive plan"
+      Enabled: true
+      Topic:
+        Value: /prompt_drive/path
+        Depth: 1
+      Color: 255; 255; 255
+      Line Style: Lines
+  Enabled: true
+  Global Options:
+    Background Color: 25; 25; 30
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 25
+      Pitch: 0.75
+      Yaw: 0.8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1500
