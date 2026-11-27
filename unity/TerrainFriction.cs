@@ -2,7 +2,9 @@
 // Put it on the robot root (A4WD3), next to CmdVelDriver. Drag the Terrain in.
 //
 // "layers": one entry per terrain layer, SAME ORDER as Paint Texture (asphalt, dirt, grass, gravel, mud on FlatTest).
-// Leave it empty and press Play once: it fills itself from the terrain's layer names + the ontology's first-guess mu.
+// It fills itself when you add the component (or right-click the component > "Fill from terrain"), from the
+// terrain's layer names + the ontology's first-guess mu. Then edit the mu sliders in the Inspector (NOT in Play mode,
+// Play-mode edits are lost when you stop).
 //
 // How: every physics step, look up the paint weights under each wheel (cached alphamap, no raycast),
 // mu = weighted mix of the layers' mu, and set it on that wheel's own PhysicsMaterial.
@@ -44,14 +46,7 @@ public class TerrainFriction : MonoBehaviour
         td = terrain.terrainData;
         alpha = td.GetAlphamaps(0, 0, td.alphamapWidth, td.alphamapHeight);
 
-        if (layers.Count == 0)
-            foreach (var tl in td.terrainLayers)
-            {
-                string n = tl ? tl.name.ToLower() : "?";
-                float mu = 0.6f;
-                foreach (var kv in Defaults) if (n.Contains(kv.Key)) { mu = kv.Value; n = kv.Key; break; }
-                layers.Add(new LayerFriction { name = n, mu = mu });
-            }
+        if (layers.Count == 0) Fill();
         if (layers.Count != td.alphamapLayers)
             Debug.LogWarning($"[TerrainFriction] {layers.Count} entries but the terrain has {td.alphamapLayers} layers");
 
@@ -72,6 +67,23 @@ public class TerrainFriction : MonoBehaviour
         string s = "";
         for (int k = 0; k < layers.Count; k++) s += $"{k}:{layers[k].name}={layers[k].mu:0.00}  ";
         Debug.Log($"[TerrainFriction] layers {s}| wheel colliders {wheelCols[0].Length},{wheelCols[1].Length},{wheelCols[2].Length},{wheelCols[3].Length}");
+    }
+
+    void Reset() { terrain = Terrain.activeTerrain; Fill(); }      // runs when the component is added in the editor
+
+    [ContextMenu("Fill from terrain")]
+    void Fill()
+    {
+        if (!terrain) terrain = Terrain.activeTerrain;
+        if (!terrain) return;
+        layers.Clear();
+        foreach (var tl in terrain.terrainData.terrainLayers)
+        {
+            string n = tl ? tl.name.ToLower() : "?";
+            float mu = 0.6f;
+            foreach (var kv in Defaults) if (n.Contains(kv.Key)) { mu = kv.Value; n = kv.Key; break; }
+            layers.Add(new LayerFriction { name = n, mu = mu });
+        }
     }
 
     void FixedUpdate()
